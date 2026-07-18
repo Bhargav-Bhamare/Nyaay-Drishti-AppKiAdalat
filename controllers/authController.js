@@ -40,19 +40,31 @@ exports.signup = async (req, res) => {
 exports.login = async (req, res) => {
   const { email, password } = req.body;
 
-  const user = users.find(u => u.email === email);
+  // Determine which login page to render on failure based on role hint
+  // The judge and court master forms both POST here; use a hidden field to know which view to re-render
+  const fromView = req.body.fromView || 'judge'; // 'judge' | 'cmaster'
+  const errorView = fromView === 'cmaster' ? 'auth/cMasterLogin' : 'auth/judgeLogin';
+  const errorLocals = { error: ['Invalid credentials. Please try again.'] };
+
+  if (!email || !password) {
+    return res.render(errorView, errorLocals);
+  }
+
+  const user = users.find(u => u.email === email.toLowerCase().trim());
   if (!user) {
-    return res.render("auth/login", { error: "Invalid credentials" });
+    return res.render(errorView, errorLocals);
   }
 
   const isMatch = await bcrypt.compare(password, user.password);
   if (!isMatch) {
-    return res.render("auth/login", { error: "Invalid credentials" });
+    return res.render(errorView, errorLocals);
   }
 
+  // Set the session — isAuth and checkRole middlewares read req.session.user
   req.session.user = {
-    id: user.id,
-    role: user.role
+    id:   user.id,
+    name: user.name,
+    role: user.role,
   };
 
   redirectByRole(user.role, res);
