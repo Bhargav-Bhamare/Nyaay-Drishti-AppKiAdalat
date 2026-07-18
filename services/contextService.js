@@ -64,8 +64,6 @@ async function retrieveSimilarCases(caseDescription, topK = 3) {
   }
 
   try {
-    // POST /api/v1/context/search
-    // Returns HTTP 202 on success; response body: { contexts: [...] }
     const response = await client.v1.context.search({
       query: caseDescription,
       similarity_threshold: SIMILARITY_MAX,
@@ -75,7 +73,6 @@ async function retrieveSimilarCases(caseDescription, topK = 3) {
 
     const raw = response?.contexts ?? [];
 
-    // Normalise to ContextChunk shape and take only top-K results
     return raw
       .slice(0, topK)
       .map((item) => ({
@@ -84,9 +81,12 @@ async function retrieveSimilarCases(caseDescription, topK = 3) {
         metadata: item.metadata ?? {},
       }));
   } catch (err) {
-    // Non-fatal: log and return empty context so the LLM can still run
-    // without historical benchmarks (pure rule-based fallback takes over).
-    console.error('[contextService] retrieveSimilarCases failed:', err.message ?? err);
+    // Catch all failures — 500 from Alchemyst, network errors, SDK exhausted
+    // retries, etc. — and degrade gracefully so the LLM still runs without
+    // historical context and the endpoint always returns 200.
+    const status  = err.status ?? err.response?.status ?? 'N/A';
+    const detail  = err.message ?? String(err);
+    console.warn(`[contextService fallback active] retrieveSimilarCases failed (HTTP ${status}): ${detail}`);
     return [];
   }
 }

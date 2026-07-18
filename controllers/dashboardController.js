@@ -10,8 +10,13 @@ const { generateSchedulingMetadata } = require("../services/llmSchedulerService.
 /** LLM confidence floor — below this the rule-based score is used instead */
 const CONFIDENCE_THRESHOLD = 0.70;
 
-/** Max concurrent LLM calls when augmenting the cause list */
-const BATCH_CONCURRENCY = 5;
+/**
+ * Milliseconds to wait between consecutive Groq calls in a batch.
+ * At the free-tier limit of 6000 TPM, each ~300-token request needs ~3 s of
+ * headroom when 13 cases are processed. 800 ms gives comfortable breathing
+ * room without making the endpoint feel slow.
+ */
+const GROQ_REQUEST_DELAY_MS = 800;
 
 // Sample data for demonstration (can be replaced with DB queries)
 const sampleCases = [
@@ -348,60 +353,76 @@ exports.updateLawyerProfile = async (req, res) => {
 // ==========================================
 
 /**
- * Bounded concurrency map — runs an async worker over an array with a
- * fixed concurrency ceiling. Same approach as schedulerController.js so
- * Keploy sees consistent I/O patterns across both controllers.
+ * Simple async delay helper.
  */
-async function pooledMap(items, concurrency, worker) {
-  const results = new Array(items.length);
-  let idx = 0;
-  async function runSlot() {
-    while (idx < items.length) {
-      const i = idx++;
-      results[i] = await worker(items[i]);
-    }
-  }
-  await Promise.all(
-    Array.from({ length: Math.min(concurrency, items.length) }, runSlot),
-  );
-  return results;
+function sleep(ms) {
+  return new Promise((resolve) => setTimeout(resolve, ms));
 }
 
 /**
  * Run the full AI evaluation pipeline for one case and return a merged
  * result object that carries both the LLM output and the rule-based baseline.
- * Returns null on any unhandled error so the batch never hard-fails.
+ *
+ * This function NEVER throws — every failure path returns a valid object
+ * built from the rule-based engine so the batch always produces 200 OK.
  *
  * @param {Object} caseObj  - lean Mongoose document
- * @returns {Promise<Object|null>}
+ * @returns {Promise<Object>}
  */
 async function aiAugmentCase(caseObj) {
+  // Rule-based score is always computed first — it's the guaranteed floor.
+  let ruleScore, ruleMinutes;
   try {
-    const casePayload  = normalizeCaseInput(caseObj);
-    const contextChunks = await retrieveSimilarCases(casePayload.rawDescription, 3);
-    const llmResult    = await generateSchedulingMetadata(casePayload, contextChunks);
+    ruleScore   = calculatePriority(caseObj);
+    ruleMinutes = estimateCaseTime(caseObj);
+  } catch (ruleErr) {
+    console.error('[dashboardController] calculatePriority threw for case', caseObj._id, ':', ruleErr.message);
+    // Absolute last-resort defaults
+    ruleScore   = { score: 0.3, breakdown: {}, reasoning: [] };
+    ruleMinutes = 15;
+  }
 
-    const ruleScore    = calculatePriority(caseObj);
-    const ruleMinutes  = estimateCaseTime(caseObj);
-
-    const useLLM = llmResult !== null && llmResult.confidence >= CONFIDENCE_THRESHOLD;
-
+  let casePayload;
+  try {
+    casePayload = normalizeCaseInput(caseObj);
+  } catch (normErr) {
+    console.error('[dashboardController] normalizeCaseInput threw for case', caseObj._id, ':', normErr.message);
+    // Return rule-based only — no LLM attempt
     return {
-      _id:              String(caseObj._id),
-      usedLLM:          useLLM,
-      finalPriorityScore:    useLLM ? llmResult.priorityScore    : Math.round(ruleScore.score * 5),
-      finalEstimatedMinutes: useLLM ? llmResult.estimatedMinutes : ruleMinutes,
-      llm:       llmResult ?? null,
+      _id:                   String(caseObj._id),
+      usedLLM:               false,
+      finalPriorityScore:    Math.round(ruleScore.score * 5) || 1,
+      finalEstimatedMinutes: ruleMinutes,
+      llm:                   null,
       ruleBased: {
-        score:    parseFloat(ruleScore.score.toFixed(4)),
+        score:     parseFloat(ruleScore.score.toFixed(4)),
         breakdown: ruleScore.breakdown,
         reasoning: ruleScore.reasoning,
       },
     };
-  } catch (err) {
-    console.error("[dashboardController] aiAugmentCase error for case", caseObj._id, ":", err.message);
-    return null;
   }
+
+  // Context retrieval — already has its own fallback (returns [])
+  const contextChunks = await retrieveSimilarCases(casePayload.rawDescription, 3);
+
+  // LLM call — already has its own fallback (returns algorithmicFallbackScore)
+  const llmResult = await generateSchedulingMetadata(casePayload, contextChunks);
+
+  // Blend: LLM wins when confident enough, otherwise rule-based takes over
+  const useLLM = llmResult !== null && llmResult.confidence >= CONFIDENCE_THRESHOLD;
+
+  return {
+    _id:                   String(caseObj._id),
+    usedLLM:               useLLM,
+    finalPriorityScore:    useLLM ? llmResult.priorityScore    : Math.round(ruleScore.score * 5) || 1,
+    finalEstimatedMinutes: useLLM ? llmResult.estimatedMinutes : ruleMinutes,
+    llm:      llmResult ?? null,
+    ruleBased: {
+      score:     parseFloat(ruleScore.score.toFixed(4)),
+      breakdown: ruleScore.breakdown,
+      reasoning: ruleScore.reasoning,
+    },
+  };
 }
 
 /**
@@ -464,16 +485,26 @@ exports.getDailyCauseList = async (req, res) => {
     // Map cause-list _ids back to full case objects for the LLM service
     const caseById = Object.fromEntries(preparedCases.map((c) => [c._id, c]));
 
-    const augmentations = await pooledMap(
-      causeListCases,
-      BATCH_CONCURRENCY,
-      (item) => aiAugmentCase(caseById[item._id] || item),
-    );
+    // ── Sequential processing with inter-request delay ────────────────────
+    // Running all LLM calls concurrently saturates Groq's 6000 TPM free-tier
+    // limit and triggers 429s for every case after the first two. Sequential
+    // processing with GROQ_REQUEST_DELAY_MS between calls keeps the token
+    // rate well within limits. The algorithmic fallback in llmSchedulerService
+    // ensures every case still gets a score even if a 429 slips through.
+    const augmentations = [];
+    for (let i = 0; i < causeListCases.length; i++) {
+      const item = causeListCases[i];
+      augmentations.push(await aiAugmentCase(caseById[item._id] || item));
+      // Throttle: skip delay after the last item
+      if (i < causeListCases.length - 1) {
+        await sleep(GROQ_REQUEST_DELAY_MS);
+      }
+    }
 
     // ── 5. Merge AI results back into each cause list item ────────────────────
     const augmentedList = causeListCases.map((item, i) => {
       const aug = augmentations[i];
-      if (!aug) return item;           // LLM failed for this case — keep original
+      if (!aug) return item;  // safety net — should never be null now
       return {
         ...item,
         usedLLM:               aug.usedLLM,
@@ -481,7 +512,6 @@ exports.getDailyCauseList = async (req, res) => {
         finalEstimatedMinutes: aug.finalEstimatedMinutes,
         llm:                   aug.llm,
         ruleBased:             aug.ruleBased,
-        // Override estimatedTime so time-slot display stays consistent
         estimatedTime:         aug.finalEstimatedMinutes,
       };
     });
