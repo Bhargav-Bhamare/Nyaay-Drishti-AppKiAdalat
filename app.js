@@ -1,3 +1,4 @@
+require("dotenv").config();
 const express = require("express");
 const app = express();
 const mongoose = require("mongoose");
@@ -10,8 +11,9 @@ const LocalStrategy = require("passport-local");
 const Lawyer = require("./model/lawyer.js");
 
 //Router Requirement
-const dashboardRoutes = require("./routes/dashboardRoutes");
-const lawyerRouter = require("./routes/lawyer.js");
+const dashboardRoutes  = require("./routes/dashboardRoutes");
+const lawyerRouter     = require("./routes/lawyer.js");
+const schedulerRoutes  = require("./routes/schedulerRoutes");
 
 const session = require("express-session");
 
@@ -65,6 +67,7 @@ app.use((req,res,next) =>{
 
 app.use("/",lawyerRouter);
 app.use(dashboardRoutes);
+app.use("/api/scheduler", schedulerRoutes);
 
 app.get("/",(req,res)=> {
     res.render("landing.ejs");
