@@ -26,6 +26,7 @@ const AlchemystAI = require('@alchemystai/sdk').default;
 // ─── CONFIG ──────────────────────────────────────────────────────────────────
 
 const CONCURRENCY = 5;          // max simultaneous /context/add calls
+const ROW_LIMIT   = 500;        // max valid rows to ingest per CSV file
 const SOURCE_BAIL  = 'nyaay-drishti.bail-cases';
 const SOURCE_WRIT  = 'nyaay-drishti.writ-cases';
 
@@ -198,8 +199,8 @@ async function pooledMap(items, concurrency, worker) {
  * Streams a CSV file and collects valid rows into memory in batches,
  * then flushes each batch to Alchemyst with controlled concurrency.
  *
- * We batch (CONCURRENCY × 20) rows at a time so we never hold the full
- * 33–69 MB file in memory at once.
+ * Stops after ROW_LIMIT valid rows by destroying the underlying stream,
+ * which fires 'close' instead of 'end' — both paths flush and resolve cleanly.
  *
  * @param {string} filePath
  * @param {string} dataset   - 'bail' | 'writ'
@@ -209,19 +210,56 @@ async function pooledMap(items, concurrency, worker) {
 async function processFile(filePath, dataset, source) {
   const BATCH_SIZE = CONCURRENCY * 20;
 
-  let ingested = 0;
-  let failed   = 0;
-  let skipped  = 0;
-  let total    = 0;
+  let ingested  = 0;
+  let failed    = 0;
+  let skipped   = 0;
+  let total     = 0;       // valid rows accepted (excludes skipped)
+  let limitHit  = false;   // guard so destroy() is called exactly once
 
   console.log(`\n📂  Starting: ${path.basename(filePath)}`);
-  console.log(`    Source  : ${source}\n`);
+  console.log(`    Source  : ${source}`);
+  console.log(`    Limit   : ${ROW_LIMIT} rows\n`);
 
   return new Promise((resolve, reject) => {
     const batch = [];
 
-    const stream = fs.createReadStream(filePath, { encoding: 'utf8' })
-      .pipe(csv());
+    // Keep a reference to the raw ReadStream so we can destroy it cleanly.
+    const fileStream = fs.createReadStream(filePath, { encoding: 'utf8' });
+    const stream = fileStream.pipe(csv());
+
+    /**
+     * Flush whatever is currently in `batch` to Alchemyst, then resolve.
+     * Called by both the 'end' handler (natural EOF) and the 'close' handler
+     * (stream destroyed after hitting ROW_LIMIT).
+     */
+    async function flushAndResolve(reason) {
+      if (batch.length > 0) {
+        const snap = batch.splice(0);
+        const results = await pooledMap(snap, CONCURRENCY,
+          (r) => uploadRow(r, dataset, source));
+
+        for (const res of results) {
+          if (res.ok) {
+            ingested++;
+            process.stdout.write(`  [✓] ${res.cnr} (${ingested})\r`);
+          } else {
+            failed++;
+            console.error(`\n  [✗] ${res.cnr} — ${res.error}`);
+          }
+        }
+      }
+
+      console.log(`\n\n  ────────────────────────────────`);
+      console.log(`  Dataset   : ${dataset.toUpperCase()}`);
+      console.log(`  Stop reason: ${reason}`);
+      console.log(`  Valid rows read : ${total}`);
+      console.log(`  Skipped   : ${skipped}  (missing CNR_NUMBER)`);
+      console.log(`  Ingested  : ${ingested}`);
+      console.log(`  Failed    : ${failed}`);
+      console.log(`  ────────────────────────────────\n`);
+
+      resolve({ ingested, failed, skipped });
+    }
 
     // Pause the stream while we flush a batch so back-pressure is respected.
     stream.on('data', async (row) => {
@@ -233,6 +271,16 @@ async function processFile(filePath, dataset, source) {
 
       total++;
       batch.push(row);
+
+      // ── Hard limit: destroy the stream once we have enough valid rows ──
+      if (total >= ROW_LIMIT && !limitHit) {
+        limitHit = true;
+        stream.pause();
+        // destroy() triggers 'close' on the underlying fileStream; the
+        // csv-parser stream itself emits 'close' which we handle below.
+        fileStream.destroy();
+        return;
+      }
 
       if (batch.length >= BATCH_SIZE) {
         stream.pause();
@@ -253,32 +301,13 @@ async function processFile(filePath, dataset, source) {
       }
     });
 
-    stream.on('end', async () => {
-      // Flush the remaining partial batch
-      if (batch.length > 0) {
-        const results = await pooledMap(batch, CONCURRENCY,
-          (r) => uploadRow(r, dataset, source));
+    // Natural end-of-file — flush whatever remains in the batch.
+    stream.on('end', () => flushAndResolve('end of file'));
 
-        for (const res of results) {
-          if (res.ok) {
-            ingested++;
-            process.stdout.write(`  [✓] ${res.cnr} (${ingested})\r`);
-          } else {
-            failed++;
-            console.error(`\n  [✗] ${res.cnr} — ${res.error}`);
-          }
-        }
-      }
-
-      console.log(`\n\n  ────────────────────────────────`);
-      console.log(`  Dataset   : ${dataset.toUpperCase()}`);
-      console.log(`  Total rows: ${total + skipped}`);
-      console.log(`  Skipped   : ${skipped}  (missing CNR_NUMBER)`);
-      console.log(`  Ingested  : ${ingested}`);
-      console.log(`  Failed    : ${failed}`);
-      console.log(`  ────────────────────────────────\n`);
-
-      resolve({ ingested, failed, skipped });
+    // Fired when fileStream.destroy() is called after hitting ROW_LIMIT.
+    // csv-parser propagates the 'close' event from the source stream.
+    fileStream.on('close', () => {
+      if (limitHit) flushAndResolve(`row limit reached (${ROW_LIMIT})`);
     });
 
     stream.on('error', (err) => {
@@ -343,10 +372,13 @@ async function main() {
   process.exit(totalFailed > 0 ? 1 : 0);
 }
 
-main().catch((err) => {
-  console.error('[FATAL]', err);
-  process.exit(1);
-});
+// Only run main() when executed directly, not when require()'d by tests or other modules
+if (require.main === module) {
+  main().catch((err) => {
+    console.error('[FATAL]', err);
+    process.exit(1);
+  });
+}
 
 // ─── EXPORTS (for reuse by Gnani.ai voice parser etc.) ───────────────────────
 module.exports = { buildContextText, sanitize, parseDate };
