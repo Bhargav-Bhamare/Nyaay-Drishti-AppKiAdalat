@@ -11,6 +11,7 @@ const LocalStrategy = require("passport-local");
 const Lawyer = require("./model/lawyer.js");
 
 //Router Requirement
+const authRoutes     = require("./routes/authRoutes");
 const dashboardRoutes  = require("./routes/dashboardRoutes");
 const lawyerRouter     = require("./routes/lawyer.js");
 const schedulerRoutes  = require("./routes/schedulerRoutes");
@@ -65,6 +66,7 @@ app.use((req,res,next) =>{
     next();
 });
 
+app.use(authRoutes);
 app.use("/",lawyerRouter);
 app.use(dashboardRoutes);
 app.use("/api/scheduler", schedulerRoutes);

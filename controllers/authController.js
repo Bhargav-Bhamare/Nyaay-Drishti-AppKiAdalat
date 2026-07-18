@@ -1,6 +1,6 @@
 const bcrypt = require("bcrypt");
 const users = require("../data/tempusers");
-const redirectByRole = require("../utils/redirectByRole");
+const redirectByRole = require("../utils/redirectRole");
 
 exports.getLogin = (req, res) => {
   res.render("auth/login");
