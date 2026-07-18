@@ -7,9 +7,11 @@ const ejsMate = require("ejs-mate");
 const flash = require("connect-flash");
 const passport = require("passport");
 const LocalStrategy = require("passport-local");
+const Lawyer = require("./model/lawyer.js");
 
-
-
+//Router Requirement
+const dashboardRoutes = require("./routes/dashboardRoutes");
+const lawyerRouter = require("./routes/lawyer.js");
 
 const session = require("express-session");
 
@@ -32,10 +34,26 @@ async function main() {
   await mongoose.connect("mongodb://localhost:27017/NyaayDrishti");
 };
 
+//Session Configuration
+app.use(
+  session({
+    name: "judicial-session",
+    secret: "hackathon-secret-key",
+    resave: false,
+    saveUninitialized: false,
+    cookie: {
+      httpOnly: true,
+      maxAge: 1000 * 60 * 60 // 1 hour
+    }
+  })
+);
+app.use(flash());
 //All related to Passport
 app.use(passport.initialize());
 app.use(passport.session());
-
+passport.use(new LocalStrategy({ usernameField: 'email' }, Lawyer.authenticate()));
+passport.serializeUser(Lawyer.serializeUser());
+passport.deserializeUser(Lawyer.deserializeUser());
 
 //Flash Related
 app.use((req,res,next) =>{
@@ -45,12 +63,36 @@ app.use((req,res,next) =>{
     next();
 });
 
-
+app.use("/",lawyerRouter);
+app.use(dashboardRoutes);
 
 app.get("/",(req,res)=> {
     res.render("landing.ejs");
 });
 
+app.get("/lawyerDashboard", (req, res) =>{
+  if (!req.user) {
+    req.flash("error", "Please login to access the Lawyer Dashboard");
+    return res.redirect('/login');
+  }
+  res.render("lawyer/lawyerDash.ejs");
+});
+
+app.get("/judgeDashboard",(req,res) =>{
+    res.render("judge/judgeDash.ejs");
+});
+
+app.get("/cMasterDashboard",(req,res) =>{
+    res.render("cMaster/cMasterDash.ejs");
+});
+
+app.get("/judgeLogin",(req,res) =>{
+    res.render("auth/judgeLogin.ejs");
+});
+
+app.get("/cMasterLogin",(req,res) =>{
+    res.render("auth/cMasterLogin.ejs");
+});
 
 app.listen(8080,()=>{
     console.log("Listening to port Successfully!");
