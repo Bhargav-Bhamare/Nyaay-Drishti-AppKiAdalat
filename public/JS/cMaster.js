@@ -7,13 +7,17 @@ const DAY_AVAILABLE_MINUTES = 300; // default
 
 async function loadCauseListForCM() {
   try {
-    const res = await fetch('/api/daily-cause-list?availableMinutes=' + DAY_AVAILABLE_MINUTES);
+    const res = await fetch('/api/dashboard/daily-cause-list?availableMinutes=' + DAY_AVAILABLE_MINUTES + '&aiEnhanced=true');
     if (!res.ok) throw new Error('Failed to fetch daily cause list');
     const json = await res.json();
     const list = json && json.data && json.data.dailyCauseList ? json.data.dailyCauseList : [];
+    const summary = json && json.data && json.data.summary ? json.data.summary : {};
     renderCauseList(list);
+    updateClosureSummary(list, summary);
   } catch (err) {
     console.error('Error loading cause list for Court Master:', err);
+    const tbody = document.getElementById('causeListBody');
+    if (tbody) tbody.innerHTML = '<tr><td colspan="8" style="text-align:center;color:#dc3545;padding:1rem;">Failed to load cause list. Please refresh.</td></tr>';
   }
 }
 
@@ -53,11 +57,24 @@ function renderCauseList(list) {
     const startAbs = parseTimeToMinutes(startStr);
     const startOffset = (startAbs !== null) ? (startAbs - (COURT_START_HOUR * 60 + COURT_START_MIN)) : null;
 
-    schedule.push({ id: item._id || `C${idx}`, caseNumber: item.caseNumber || '', petitioner: item.petitioner || '', respondent: item.respondent || '', caseType: item.caseType || '', stage: item.stage || '', startOffset, estimatedTime: est, startStr, endStr });
+    schedule.push({
+      id: item._id || `C${idx}`,
+      serialNumber: item.serialNumber || idx + 1,
+      caseNumber: item.caseNumber || '',
+      petitioner: item.petitioner || '',
+      respondent: item.respondent || '',
+      caseType: item.caseType || '',
+      stage: item.stage || '',
+      startOffset,
+      estimatedTime: est,
+      startStr,
+      endStr,
+    });
   });
 
   // Render rows and store schedule data on each row
   schedule.forEach((s, idx) => {
+    const item = list[idx] || {};
     const tr = document.createElement('tr');
     tr.className = 'case-row';
     tr.dataset.caseId = s.id;
@@ -65,18 +82,38 @@ function renderCauseList(list) {
     tr.dataset.estimatedTime = s.estimatedTime;
     tr.dataset.startOffset = s.startOffset !== null ? s.startOffset : '';
 
-    const priorityLabel = (list[idx] && list[idx].priority && typeof list[idx].priority.score === 'number') ? (list[idx].priority.score >= 0.85 ? 'High' : list[idx].priority.score >= 0.6 ? 'Medium' : 'Low') : 'Unknown';
-    const status = list[idx] && list[idx].status ? list[idx].status : 'Pending';
+    // ── AI-aware priority label (finalPriorityScore is 1–5 integer) ──────────
+    const finalScore = (item.finalPriorityScore != null) ? item.finalPriorityScore : null;
+    const ruleScore  = (item.priority && typeof item.priority.score === 'number') ? item.priority.score : null;
+
+    let priorityLevel, priorityLabel;
+    if (finalScore != null) {
+      // Map 1–5 to high / medium / low
+      priorityLevel = finalScore >= 4 ? 'high' : finalScore >= 3 ? 'medium' : 'low';
+      priorityLabel  = finalScore >= 4 ? 'High'  : finalScore >= 3 ? 'Medium'  : 'Low';
+    } else if (ruleScore != null) {
+      priorityLevel = ruleScore >= 0.7 ? 'high' : ruleScore >= 0.5 ? 'medium' : 'low';
+      priorityLabel  = ruleScore >= 0.7 ? 'High'  : ruleScore >= 0.5 ? 'Medium'  : 'Low';
+    } else {
+      priorityLevel = 'low'; priorityLabel = 'Unknown';
+    }
+
+    // ── AI badge (shown only when LLM was used) ───────────────────────────────
+    const aiBadge = item.usedLLM
+      ? `<span title="${escapeHtml(item.llm && item.llm.reasoning ? item.llm.reasoning : '')}" style="margin-left:4px;display:inline-block;background:#eef2ff;color:#3730a3;border:1px solid #c7d2fe;border-radius:4px;padding:1px 5px;font-size:0.72rem;font-weight:600;cursor:help;">AI ✦ ${finalScore}/5</span>`
+      : (finalScore != null ? `<span style="margin-left:4px;display:inline-block;background:#f9fafb;color:#6b7280;border:1px solid #e5e7eb;border-radius:4px;padding:1px 5px;font-size:0.72rem;">⚙ ${finalScore}/5</span>` : '');
+
+    const status = item.status ? item.status : 'Pending';
 
     const timeHtml = `<div class="time-cell"><div class="time-text">${s.startStr || ''} - ${s.endStr || ''}</div><div class="time-bar"><div class="time-fill" style="width:${(s.estimatedTime / DAY_AVAILABLE_MINUTES) * 100}%"></div></div></div>`;
 
     tr.innerHTML = `
-      <td>${idx + 1}</td>
+      <td>${s.serialNumber || idx + 1}</td>
       <td><strong>${escapeHtml(s.caseNumber)}</strong></td>
-      <td>${escapeHtml(s.caseType)} - ${escapeHtml(s.petitioner)} v/s ${escapeHtml(s.respondent)}</td>
+      <td>${escapeHtml(s.caseType)} — ${escapeHtml(s.petitioner)} v/s ${escapeHtml(s.respondent)}</td>
       <td>${escapeHtml(s.stage)}</td>
       <td>${timeHtml}</td>
-      <td><span class="priority-badge priority-${priorityLabel.toLowerCase()}"></span>${priorityLabel}</td>
+      <td><span class="priority-badge priority-${priorityLevel}"></span>${priorityLabel}${aiBadge}</td>
       <td><span class="status-badge status-pending">${escapeHtml(status)}</span></td>
       <td>
         <div class="action-buttons">
@@ -223,6 +260,42 @@ function extendCaseTime(caseId, extraMinutes) {
 document.addEventListener('click', () => {
   document.querySelectorAll('.expand-menu').forEach(m => m.classList.add('hidden'));
 });
+
+/**
+ * Update the Daily Closure Summary panel with live AI-enhanced figures.
+ * Falls back gracefully when no data is available.
+ */
+function updateClosureSummary(list, summary) {
+  // Tile counts
+  const causeListTile = document.querySelector('.cause-list-tile .tile-count');
+  if (causeListTile) causeListTile.textContent = list.length;
+
+  // Closure stats
+  const statEls = document.querySelectorAll('.closure-stat-value');
+  if (statEls.length >= 4) {
+    statEls[0].textContent = summary.casesScheduled != null ? summary.casesScheduled : list.length;
+    // "Heard" and "Adjourned" start at 0 — updated client-side as Court Master clicks
+    statEls[1].textContent = statEls[1].textContent || '0';
+    statEls[2].textContent = statEls[2].textContent || '0';
+    statEls[3].textContent = statEls[3].textContent || '0';
+  }
+
+  // AI summary banner (inject once below the filters bar)
+  if (summary.aiEnhancedCount != null && !document.getElementById('ai-summary-banner')) {
+    const banner = document.createElement('div');
+    banner.id = 'ai-summary-banner';
+    banner.style.cssText = 'background:#eef2ff;border:1px solid #c7d2fe;border-radius:6px;padding:10px 16px;margin-bottom:1rem;font-size:0.88rem;color:#3730a3;display:flex;gap:16px;flex-wrap:wrap;align-items:center;';
+    banner.innerHTML = `
+      <strong>✦ AI Scheduler Active</strong>
+      <span>📊 ${summary.aiEnhancedCount} cases scored by LLM</span>
+      <span>⚙ ${summary.ruleBasedFallbacks} used rule-based fallback</span>
+      <span>⏱ ${summary.totalMinutesUsed} min scheduled / ${summary.totalMinutesAvailable} available</span>
+      <span>📈 ${summary.utilizationPercentage}% utilization</span>
+    `;
+    const filtersBar = document.querySelector('.filters-bar');
+    if (filtersBar) filtersBar.insertAdjacentElement('afterend', banner);
+  }
+}
 
 // initialize
 document.addEventListener('DOMContentLoaded', () => {

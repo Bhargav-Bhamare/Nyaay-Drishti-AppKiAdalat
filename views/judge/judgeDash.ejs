@@ -214,14 +214,15 @@
     // Placeholder case data for demo / hackathon
     let CASES = [];
 
-    // Load Daily Cause List from priority engine
+    // Load Daily Cause List from AI-enhanced priority engine
     async function loadDailyCauseList() {
       try {
-        const response = await fetch('/api/daily-cause-list?availableMinutes=300');
+        const response = await fetch('/api/dashboard/daily-cause-list?availableMinutes=300&aiEnhanced=true');
         if (!response.ok) throw new Error('Failed to load daily cause list');
         
         const data = await response.json();
         const causeList = data && data.data && data.data.dailyCauseList ? data.data.dailyCauseList : [];
+        const summary  = data && data.data && data.data.summary ? data.data.summary : {};
 
         // Defensive transform to CASES format (guard against missing fields)
         if (!Array.isArray(causeList)) {
@@ -229,43 +230,66 @@
         }
 
         CASES = (causeList || []).map((item, index) => {
-          // log raw item when fields are missing for debugging
           if (!item || !item.caseNumber) {
             console.warn('Malformed case item in dailyCauseList at index', index, item);
           }
 
-          const priorityScore = item && item.priority && typeof item.priority.score === 'number' ? item.priority.score : 0;
+          // Use AI finalPriorityScore (1–5) when available, else fall back to rule-based 0–1 float
+          const finalScore = (item && item.finalPriorityScore != null) ? item.finalPriorityScore : null;
+          const ruleScore  = (item && item.priority && typeof item.priority.score === 'number') ? item.priority.score : 0;
 
           return {
-            id: (item && item._id) ? String(item._id) : `C${index}`,
-            caseNumber: item && item.caseNumber ? item.caseNumber : `UNDEF-${index}`,
-            title: `${(item && item.caseType) || 'Unknown'} - ${(item && item.petitioner) || '—'} v/s ${(item && item.respondent) || '—'}`,
-            category: (item && item.caseType) || 'Unknown',
-            priority: getPriorityLevel(priorityScore),
-            stage: (item && item.stage) || 'Unknown',
-            petitioner: (item && item.petitioner) || '—',
-            respondent: (item && item.respondent) || '—',
-            advocates: ['Advocate 1', 'Advocate 2'],
-            summary: `Case Type: ${(item && item.caseType) || '—'}. Petitioner: ${(item && item.petitioner) || '—'}. Respondent: ${(item && item.respondent) || '—'}. Stage: ${(item && item.stage) || '—'}. Priority Score: ${(priorityScore * 100).toFixed(1)}%.`,
-            lastOrder: item && item.startTime ? `Scheduled for ${item.startTime} to ${item.endTime}` : 'No schedule',
-            time: (item && item.startTime) || '',
+            id:           (item && item._id) ? String(item._id) : `C${index}`,
+            caseNumber:   (item && item.caseNumber) ? item.caseNumber : `UNDEF-${index}`,
+            title:        `${(item && item.caseType) || 'Unknown'} — ${(item && item.petitioner) || '—'} v/s ${(item && item.respondent) || '—'}`,
+            category:     (item && item.caseType) || 'Unknown',
+            priority:     getPriorityLevel(finalScore != null ? finalScore : ruleScore, finalScore != null),
+            stage:        (item && item.stage) || 'Unknown',
+            petitioner:   (item && item.petitioner) || '—',
+            respondent:   (item && item.respondent) || '—',
+            advocates:    ['Advocate 1', 'Advocate 2'],
+            summary:      `Case Type: ${(item && item.caseType) || '—'}. Stage: ${(item && item.stage) || '—'}. Pending age: ${(item && item.ruleBased && item.ruleBased.breakdown) ? Math.round((item.ruleBased.breakdown.age.factor || 0) * 365) + ' days' : '—'}.`,
+            lastOrder:    (item && item.startTime) ? `Scheduled ${item.startTime} – ${item.endTime} (${item.estimatedTime} min)` : 'No schedule',
+            time:         (item && item.startTime) || '',
             estimatedTime: (item && item.estimatedTime) || 0,
-            priorityScore: priorityScore,
-            priorityReasoning: (item && item.priority && item.priority.reasoning) || (item && item.priorityReasoning) || []
+            // AI fields
+            finalPriorityScore:    finalScore,
+            ruleBasedScore:        ruleScore,
+            usedLLM:               (item && item.usedLLM) || false,
+            llmReasoning:          (item && item.llm && item.llm.reasoning) ? item.llm.reasoning : null,
+            llmConfidence:         (item && item.llm && item.llm.confidence != null) ? item.llm.confidence : null,
+            priorityReasoning:     (item && item.ruleBased && item.ruleBased.reasoning) ? item.ruleBased.reasoning : [],
           };
         });
 
         renderCauseTable();
+
+        // Inject AI summary banner below the cause list heading (once)
+        if (summary.aiEnhancedCount != null && !document.getElementById('ai-banner-judge')) {
+          const banner = document.createElement('div');
+          banner.id = 'ai-banner-judge';
+          banner.style.cssText = 'background:#eef2ff;border:1px solid #c7d2fe;border-radius:6px;padding:8px 12px;margin-bottom:8px;font-size:12px;color:#3730a3;display:flex;gap:14px;flex-wrap:wrap;';
+          banner.innerHTML = `<strong>✦ AI Scheduler</strong><span>${summary.aiEnhancedCount} LLM-scored</span><span>${summary.ruleBasedFallbacks} rule-based</span><span>${summary.utilizationPercentage}% court utilization</span>`;
+          const heading = document.querySelector('.daily-cause-section h3');
+          if (heading) heading.insertAdjacentElement('afterend', banner);
+        }
+
         if (CASES.length) openCaseQuickView(CASES[0].id, false);
       } catch (error) {
         console.error('Error loading daily cause list:', error);
-        // Show error message
         document.getElementById('causeTableBody').innerHTML = 
-          '<tr><td colspan="5" style="text-align:center; color:red;">Error loading cause list</td></tr>';
+          '<tr><td colspan="5" style="text-align:center;color:red;">Error loading cause list</td></tr>';
       }
     }
 
-    function getPriorityLevel(score) {
+    function getPriorityLevel(score, isAiScore) {
+      // isAiScore=true  → score is 1–5 integer
+      // isAiScore=false → score is 0–1 float
+      if (isAiScore) {
+        if (score >= 4) return 'urgent';
+        if (score >= 3) return 'regular';
+        return 'low';
+      }
       if (score >= 0.85) return 'urgent';
       if (score >= 0.60) return 'regular';
       return 'low';
@@ -318,13 +342,27 @@
       // Add priority details
       const priorityDetailsEl = document.createElement('div');
       priorityDetailsEl.innerHTML = `
-        <div class="field-label" style="margin-top: 15px; border-top: 1px solid #e5e7eb; padding-top: 10px;">Priority Score</div>
-        <div class="field-value" style="color: #d32f2f; font-weight: bold; font-size: 18px;">
-          ${(c.priorityScore * 100).toFixed(1)}%
+        <div class="field-label" style="margin-top:15px;border-top:1px solid #e5e7eb;padding-top:10px;">
+          Priority Score
         </div>
-        <div class="field-label">Priority Factors</div>
-        <div style="font-size: 13px; color: #666; line-height: 1.5;">
-          ${c.priorityReasoning.map(r => `• ${r}`).join('<br>')}
+        <div class="field-value" style="display:flex;align-items:center;gap:10px;flex-wrap:wrap;">
+          ${c.finalPriorityScore != null
+            ? `<span style="font-size:22px;font-weight:700;color:${c.finalPriorityScore>=4?'#dc2626':c.finalPriorityScore>=3?'#d97706':'#16a34a'};">${c.finalPriorityScore}/5</span>
+               <span style="font-size:12px;padding:2px 7px;border-radius:4px;background:${c.usedLLM?'#eef2ff':'#f9fafb'};color:${c.usedLLM?'#3730a3':'#6b7280'};border:1px solid ${c.usedLLM?'#c7d2fe':'#e5e7eb'};">${c.usedLLM?'✦ AI':'⚙ Rule-based'}</span>`
+            : `<span style="font-size:18px;font-weight:700;color:#d32f2f;">${(c.ruleBasedScore*100).toFixed(1)}%</span>`
+          }
+        </div>
+
+        ${c.usedLLM && c.llmReasoning ? `
+        <div class="field-label">AI Reasoning</div>
+        <div style="background:#eef2ff;border:1px solid #c7d2fe;border-radius:6px;padding:8px 10px;font-size:13px;color:#1e1b4b;line-height:1.5;">
+          ${escapeHtml(c.llmReasoning)}
+          ${c.llmConfidence != null ? `<div style="margin-top:4px;font-size:12px;color:#6366f1;">Confidence: ${(c.llmConfidence*100).toFixed(0)}%</div>` : ''}
+        </div>` : ''}
+
+        <div class="field-label">Rule-based Factors</div>
+        <div style="font-size:13px;color:#666;line-height:1.7;">
+          ${(c.priorityReasoning||[]).map(r => `• ${r}`).join('<br>')}
         </div>
       `;
       const summaryDiv = document.getElementById('cv_summary').parentElement;

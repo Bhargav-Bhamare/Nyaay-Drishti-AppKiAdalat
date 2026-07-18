@@ -7,7 +7,7 @@
  */
 async function loadDailyCauseList() {
   try {
-    const response = await fetch('/api/daily-cause-list?availableMinutes=300');
+    const response = await fetch('/api/dashboard/daily-cause-list?availableMinutes=300&aiEnhanced=true');
     if (!response.ok) throw new Error('Failed to fetch daily cause list');
 
     const payload = await response.json();
@@ -204,22 +204,25 @@ function closePriorityModal() {
 }
 
 /**
- * Get color code based on priority score
+ * Get color code based on priority score.
+ * Accepts both 0–1 float (rule-based) and 1–5 integer (AI finalPriorityScore).
  */
 function getPriorityColor(score) {
-  if (score >= 0.85) return '#d32f2f'; // Red - Highest priority
-  if (score >= 0.70) return '#f57c00'; // Orange - High priority
-  if (score >= 0.50) return '#fbc02d'; // Yellow - Medium priority
-  return '#4caf50'; // Green - Lower priority
+  const s = score > 1 ? score / 5 : score; // normalise 1–5 to 0–1
+  if (s >= 0.80) return '#d32f2f';
+  if (s >= 0.60) return '#f57c00';
+  if (s >= 0.40) return '#fbc02d';
+  return '#4caf50';
 }
 
 /**
- * Get priority label based on score
+ * Get priority label. Same dual-scale handling.
  */
 function getPriorityLabel(score) {
-  if (score >= 0.85) return '🔴 Critical';
-  if (score >= 0.70) return '🟠 High';
-  if (score >= 0.50) return '🟡 Medium';
+  const s = score > 1 ? score / 5 : score;
+  if (s >= 0.80) return '🔴 Critical';
+  if (s >= 0.60) return '🟠 High';
+  if (s >= 0.40) return '🟡 Medium';
   return '🟢 Normal';
 }
 
