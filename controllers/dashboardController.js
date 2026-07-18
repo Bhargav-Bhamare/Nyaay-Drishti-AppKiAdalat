@@ -1,6 +1,17 @@
 const Lawyer = require("../model/lawyer.js");
 const Case = require("../model/case.js");
-const { generateDailyCauseList } = require("../utils/priorityEngine.js");
+const { generateDailyCauseList, calculatePriority, estimateCaseTime } = require("../utils/priorityEngine.js");
+const { normalizeCaseInput }         = require("../utils/inputSchema.js");
+const { retrieveSimilarCases }       = require("../services/contextService.js");
+const { generateSchedulingMetadata } = require("../services/llmSchedulerService.js");
+
+// ─── CONSTANTS ────────────────────────────────────────────────────────────────
+
+/** LLM confidence floor — below this the rule-based score is used instead */
+const CONFIDENCE_THRESHOLD = 0.70;
+
+/** Max concurrent LLM calls when augmenting the cause list */
+const BATCH_CONCURRENCY = 5;
 
 // Sample data for demonstration (can be replaced with DB queries)
 const sampleCases = [
@@ -337,40 +348,187 @@ exports.updateLawyerProfile = async (req, res) => {
 // ==========================================
 
 /**
- * Get Daily Cause List for Court Master & Judge
- * Generates optimized daily schedule based on priority scoring
+ * Bounded concurrency map — runs an async worker over an array with a
+ * fixed concurrency ceiling. Same approach as schedulerController.js so
+ * Keploy sees consistent I/O patterns across both controllers.
+ */
+async function pooledMap(items, concurrency, worker) {
+  const results = new Array(items.length);
+  let idx = 0;
+  async function runSlot() {
+    while (idx < items.length) {
+      const i = idx++;
+      results[i] = await worker(items[i]);
+    }
+  }
+  await Promise.all(
+    Array.from({ length: Math.min(concurrency, items.length) }, runSlot),
+  );
+  return results;
+}
+
+/**
+ * Run the full AI evaluation pipeline for one case and return a merged
+ * result object that carries both the LLM output and the rule-based baseline.
+ * Returns null on any unhandled error so the batch never hard-fails.
+ *
+ * @param {Object} caseObj  - lean Mongoose document
+ * @returns {Promise<Object|null>}
+ */
+async function aiAugmentCase(caseObj) {
+  try {
+    const casePayload  = normalizeCaseInput(caseObj);
+    const contextChunks = await retrieveSimilarCases(casePayload.rawDescription, 3);
+    const llmResult    = await generateSchedulingMetadata(casePayload, contextChunks);
+
+    const ruleScore    = calculatePriority(caseObj);
+    const ruleMinutes  = estimateCaseTime(caseObj);
+
+    const useLLM = llmResult !== null && llmResult.confidence >= CONFIDENCE_THRESHOLD;
+
+    return {
+      _id:              String(caseObj._id),
+      usedLLM:          useLLM,
+      finalPriorityScore:    useLLM ? llmResult.priorityScore    : Math.round(ruleScore.score * 5),
+      finalEstimatedMinutes: useLLM ? llmResult.estimatedMinutes : ruleMinutes,
+      llm:       llmResult ?? null,
+      ruleBased: {
+        score:    parseFloat(ruleScore.score.toFixed(4)),
+        breakdown: ruleScore.breakdown,
+        reasoning: ruleScore.reasoning,
+      },
+    };
+  } catch (err) {
+    console.error("[dashboardController] aiAugmentCase error for case", caseObj._id, ":", err.message);
+    return null;
+  }
+}
+
+/**
+ * GET /api/dashboard/daily-cause-list
+ *     ?availableMinutes=300   (default 300)
+ *     &aiEnhanced=true        (opt-in — runs LLM augmentation on every case)
+ *
+ * Behaviour:
+ *   aiEnhanced=false (default) → pure rule-based response, identical to before
+ *   aiEnhanced=true            → each item in dailyCauseList gains:
+ *       { llm, ruleBased, usedLLM, finalPriorityScore, finalEstimatedMinutes }
+ *     The list is re-sorted by finalPriorityScore after AI augmentation so the
+ *     AI-derived urgency order is reflected in the judge/court-master dashboard.
  */
 exports.getDailyCauseList = async (req, res) => {
   try {
-    // Get available court time from query params (default 300 minutes = 5 hours)
     const availableMinutes = parseInt(req.query.availableMinutes) || 300;
-    
-    // Fetch all pending cases from database as plain objects (.lean())
+    const aiEnhanced       = req.query.aiEnhanced === "true";
+
+    // ── 1. Fetch pending cases ────────────────────────────────────────────────
     const allCases = await Case.find({
-      status: { $nin: ["Judgment", "Disposed", "Withdrawn"] }
+      status: { $nin: ["Judgment", "Disposed", "Withdrawn"] },
     }).lean();
 
-    console.log(`getDailyCauseList: fetched ${ (allCases || []).length } cases from DB`);
-    if ((allCases || []).length > 0) console.log('Sample case:', allCases[0]);
+    console.log(`getDailyCauseList: fetched ${(allCases || []).length} cases | aiEnhanced=${aiEnhanced}`);
 
-    // Defensive: ensure nextHearingDate is Date for priority calculations
-    const preparedCases = (allCases || []).map(c => ({
+    const preparedCases = (allCases || []).map((c) => ({
       ...c,
-      // convert _id to string to avoid unexpected object shapes in client
-      _id: c._id ? String(c._id) : c._id,
+      _id:            String(c._id),
       nextHearingDate: c.nextHearingDate ? new Date(c.nextHearingDate) : null,
-      createdAt: c.createdAt ? new Date(c.createdAt) : null
+      createdAt:       c.createdAt       ? new Date(c.createdAt)       : null,
     }));
 
-    // Generate daily cause list using priority engine
-    const dailyCauseListData = generateDailyCauseList(preparedCases, availableMinutes);
+    // ── 2. Always run the rule-based engine first ─────────────────────────────
+    const ruleBasedResult = generateDailyCauseList(preparedCases, availableMinutes);
 
-    console.log(`getDailyCauseList: generated ${dailyCauseListData.dailyCauseList.length} scheduled cases, totalTimeUsed=${dailyCauseListData.summary.totalMinutesUsed}`);
+    // ── 3. If AI not requested, return the rule-based result unchanged ────────
+    if (!aiEnhanced) {
+      return res.json({
+        success: true,
+        date:    new Date().toLocaleDateString(),
+        aiEnhanced: false,
+        data:    ruleBasedResult,
+      });
+    }
 
-    res.json({
-      success: true,
-      date: new Date().toLocaleDateString(),
-      data: dailyCauseListData
+    // ── 4. AI augmentation path ───────────────────────────────────────────────
+    // Run LLM evaluation concurrently across all cases in the cause list
+    const causeListCases = ruleBasedResult.dailyCauseList;
+
+    if (causeListCases.length === 0) {
+      return res.json({
+        success:    true,
+        date:       new Date().toLocaleDateString(),
+        aiEnhanced: true,
+        data:       ruleBasedResult,
+      });
+    }
+
+    // Map cause-list _ids back to full case objects for the LLM service
+    const caseById = Object.fromEntries(preparedCases.map((c) => [c._id, c]));
+
+    const augmentations = await pooledMap(
+      causeListCases,
+      BATCH_CONCURRENCY,
+      (item) => aiAugmentCase(caseById[item._id] || item),
+    );
+
+    // ── 5. Merge AI results back into each cause list item ────────────────────
+    const augmentedList = causeListCases.map((item, i) => {
+      const aug = augmentations[i];
+      if (!aug) return item;           // LLM failed for this case — keep original
+      return {
+        ...item,
+        usedLLM:               aug.usedLLM,
+        finalPriorityScore:    aug.finalPriorityScore,
+        finalEstimatedMinutes: aug.finalEstimatedMinutes,
+        llm:                   aug.llm,
+        ruleBased:             aug.ruleBased,
+        // Override estimatedTime so time-slot display stays consistent
+        estimatedTime:         aug.finalEstimatedMinutes,
+      };
+    });
+
+    // ── 6. Re-sort by AI-derived priority, tiebreak by ageInDays ─────────────
+    augmentedList.sort((a, b) => {
+      const scoreDiff = (b.finalPriorityScore ?? 0) - (a.finalPriorityScore ?? 0);
+      if (scoreDiff !== 0) return scoreDiff;
+      // Tiebreaker: longer-pending case goes first (use rule-based age factor)
+      const aAge = a.ruleBased?.breakdown?.age?.factor ?? 0;
+      const bAge = b.ruleBased?.breakdown?.age?.factor ?? 0;
+      return bAge - aAge;
+    });
+
+    // ── 7. Recompute time slots after re-sort ─────────────────────────────────
+    let cursor = 0;
+    const finalList = augmentedList.map((item, i) => {
+      const start = cursor;
+      cursor += item.estimatedTime || 15;
+      return {
+        ...item,
+        serialNumber: i + 1,
+        startTime: generateTimeSlotLocal(start),
+        endTime:   generateTimeSlotLocal(cursor),
+      };
+    });
+
+    // ── 8. Rebuild summary with AI-aware figures ──────────────────────────────
+    const aiSummary = {
+      ...ruleBasedResult.summary,
+      totalMinutesUsed:     cursor,
+      casesScheduled:       finalList.length,
+      aiEnhancedCount:      finalList.filter((c) => c.usedLLM).length,
+      ruleBasedFallbacks:   finalList.filter((c) => c.usedLLM === false).length,
+      utilizationPercentage: Math.round(
+        (cursor / (availableMinutes - availableMinutes * 0.15)) * 100,
+      ),
+    };
+
+    return res.json({
+      success:    true,
+      date:       new Date().toLocaleDateString(),
+      aiEnhanced: true,
+      data: {
+        dailyCauseList: finalList,
+        summary:        aiSummary,
+      },
     });
   } catch (error) {
     console.error("Error generating daily cause list:", error);
@@ -378,30 +536,49 @@ exports.getDailyCauseList = async (req, res) => {
   }
 };
 
+/** Mirror of the helper in priorityEngine — kept local to avoid circular deps */
+function generateTimeSlotLocal(minutesFromStart) {
+  const total = 10 * 60 + 30 + minutesFromStart;
+  const h = Math.floor(total / 60);
+  const m = total % 60;
+  const ampm = h >= 12 ? "PM" : "AM";
+  const display = h > 12 ? h - 12 : h;
+  return `${display}:${String(m).padStart(2, "0")} ${ampm}`;
+}
+
 /**
- * Get case priority details (for modal/detailed view)
+ * GET /api/dashboard/case-priority/:caseId
+ * Returns detailed priority breakdown for a single case (modal / detail view).
+ * Now includes AI scheduling metadata alongside the rule-based breakdown.
  */
 exports.getCasePriorityDetails = async (req, res) => {
   try {
-    const caseId = req.params.caseId;
-    const caseObj = await Case.findById(caseId);
-
+    const caseObj = await Case.findById(req.params.caseId).lean();
     if (!caseObj) {
       return res.status(404).json({ error: "Case not found" });
     }
 
-    const { calculatePriority, estimateCaseTime } = require("../utils/priorityEngine.js");
-    
-    const priority = calculatePriority(caseObj);
-    const estimatedTime = estimateCaseTime(caseObj);
+    const ruleScore   = calculatePriority(caseObj);
+    const ruleMinutes = estimateCaseTime(caseObj);
 
-    res.json({
-      success: true,
-      caseNumber: caseObj.caseNumber,
-      priorityScore: priority.score,
-      estimatedTime: estimatedTime,
-      breakdown: priority.breakdown,
-      reasoning: priority.reasoning
+    // Run AI augmentation for the single case
+    const aug = await aiAugmentCase(caseObj);
+
+    return res.json({
+      success:      true,
+      caseNumber:   caseObj.caseNumber,
+      // Rule-based (always present)
+      priorityScore:  ruleScore.score,
+      estimatedTime:  ruleMinutes,
+      breakdown:      ruleScore.breakdown,
+      reasoning:      ruleScore.reasoning,
+      // AI layer (null when LLM unavailable)
+      ai: aug ? {
+        usedLLM:               aug.usedLLM,
+        finalPriorityScore:    aug.finalPriorityScore,
+        finalEstimatedMinutes: aug.finalEstimatedMinutes,
+        llm:                   aug.llm,
+      } : null,
     });
   } catch (error) {
     console.error("Error fetching case priority:", error);
