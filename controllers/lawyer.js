@@ -7,23 +7,44 @@ module.exports.renderSignUp = (req,res) =>{
 module.exports.registerLawyer = async (req, res, next) => {
   try {
     let { username, email, password, BarCouncilRegistrationNumber, mobile } = req.body;
-    const newUser = new Lawyer({ email, BarCouncilRegistrationNumber, username, mobile });
-    const registeredUser = await Lawyer.register(newUser, password);
-      // Attempt to log the user in. If login fails, still redirect to dashboard
-      // but record the error and notify via flash so UX is smooth for the judge/demo.
-      req.login(registeredUser, (err) => {
-        if (err) {
-          console.error('Login after register failed:', err);
-          req.flash("warning", "Registered successfully but automatic login failed. Please login manually.");
-          return res.redirect("/login");
-        }
+    const normalizedEmail = String(email || '').toLowerCase().trim();
+    const normalizedBarReg = Number(BarCouncilRegistrationNumber);
 
-        req.flash("success", "User registered successfully");
-        return res.redirect("/lawyerDashboard");
-      });
+    if (!username || !normalizedEmail || !password || !normalizedBarReg) {
+      req.flash('error', 'Please fill in all required fields.');
+      return res.redirect('/signup');
+    }
+
+    const existing = await Lawyer.findOne({ email: normalizedEmail });
+    if (existing) {
+      req.flash('error', 'An advocate account already exists with this email.');
+      return res.redirect('/signup');
+    }
+
+    const newUser = new Lawyer({
+      email: normalizedEmail,
+      username,
+      mobile,
+      BarCouncilRegistrationNumber: normalizedBarReg
+    });
+
+    const registeredUser = await Lawyer.register(newUser, password);
+    console.log('[registerLawyer] registered user', registeredUser && registeredUser.email, registeredUser && registeredUser.username);
+    req.login(registeredUser, (err) => {
+      if (err) {
+        console.error('[registerLawyer] Login after register failed:', err);
+        req.flash('warning', 'Registered successfully but automatic login failed. Please login manually.');
+        return res.redirect('/login');
+      }
+
+      console.log('[registerLawyer] login callback success for', registeredUser && registeredUser.email);
+      req.flash('success', 'User registered successfully');
+      return res.redirect('/lawyerDashboard');
+    });
   } catch (e) {
-    req.flash("error", e.message);
-    res.redirect("/signup");
+    console.error('registerLawyer error:', e);
+    req.flash('error', e.message || 'Unable to create advocate account.');
+    res.redirect('/signup');
   }
 };
 

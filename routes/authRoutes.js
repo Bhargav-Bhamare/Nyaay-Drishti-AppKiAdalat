@@ -12,7 +12,6 @@ router.get("/cMasterLogin",  (req, res) => res.render("auth/cMasterLogin", { err
 router.post("/judicial-login", authController.login);
 
 router.get("/signup", authController.getSignup);
-router.post("/signup", authController.signup);
 
 router.post("/logout", authController.logout);
 

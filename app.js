@@ -35,7 +35,9 @@ main()
 
 
 async function main() {
-  await mongoose.connect("mongodb://localhost:27017/NyaayDrishti");
+  // await mongoose.connect("mongodb://localhost:27017/NyaayDrishti");
+  const dbUrl = process.env.MONGODB_URI || "mongodb://localhost:27017/NyaayDrishti";
+  await mongoose.connect(dbUrl);
 };
 
 //Session Configuration
@@ -68,7 +70,7 @@ app.use((req,res,next) =>{
 });
 
 app.use(authRoutes);
-app.use("/",lawyerRouter);
+app.use("/", lawyerRouter);
 app.use(dashboardRoutes);
 app.use("/api/scheduler", schedulerRoutes);
 
