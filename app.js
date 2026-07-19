@@ -32,25 +32,24 @@ app.use(express.static(path.join(__dirname,"/public")));
 // Serverless-safe Database Connection Middleware
 const connectDB = async (req, res, next) => {
   try {
-    // If already connected, skip reconnecting and move to the next middleware/route
-    if (mongoose.connection.readyState >= 1) {
+    if (mongoose.connection.readyState === 1) {
       return next();
     }
 
     const dbUrl = process.env.MONGODB_URI || "mongodb://localhost:27017/NyaayDrishti";
-    
-    // Strict 5-second timeout so it fails fast if something goes wrong
+
     await mongoose.connect(dbUrl, {
-      serverSelectionTimeoutMS: 5000, 
+      serverSelectionTimeoutMS: 5000,
+      connectTimeoutMS: 5000,
     });
 
     console.log("DataBase Connection Successful!");
     next();
   } catch (err) {
     console.error("❌ Database Connection Error:", err);
-    return res.status(500).json({ 
-      error: "Database connection failed", 
-      details: err.message 
+    return res.status(500).json({
+      error: "Database connection failed",
+      details: err.message
     });
   }
 };

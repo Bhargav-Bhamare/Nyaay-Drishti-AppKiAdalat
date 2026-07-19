@@ -4,3 +4,5 @@ node_modules/
 # Ignore massive raw datasets
 data/Bail Chhattisgarh.csv
 data/Chhattisgarh_Writ_Case.csv
+.vercel
+.env*
