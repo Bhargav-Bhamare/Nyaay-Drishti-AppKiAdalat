@@ -260,6 +260,7 @@
     const langButtons = document.querySelectorAll('.lang-btn');
 
     let activeLang = 'en';
+    let recognition = null;
 
     const promptBank = [
       {
@@ -289,7 +290,7 @@
       wave.classList.remove('active');
     }
 
-    async function askAssistant(inputText, source = 'prompt') {
+    async function askAssistant(inputText) {
       setListeningState();
       transcriptBox.innerHTML = '<div class="label">Transcript</div>Sending request to the assistant…';
       responseBox.innerHTML = '<div class="assistant-header">Voice Assistant</div><p>Processing your request…</p>';
@@ -318,15 +319,48 @@
       }
     }
 
+    function startSpeechRecognition() {
+      const SpeechRecognition = window.SpeechRecognition || window.webkitSpeechRecognition;
+      if (!SpeechRecognition) {
+        transcriptBox.innerHTML = '<div class="label">Transcript</div>Browser microphone support is not available.';
+        responseBox.innerHTML = '<div class="assistant-header">Voice Assistant</div><p>Use Chrome or Edge to enable live voice input.</p>';
+        setStatus('Microphone unavailable', 'listening');
+        return;
+      }
+
+      if (!recognition) {
+        recognition = new SpeechRecognition();
+        recognition.lang = activeLang === 'hi' ? 'hi-IN' : activeLang === 'ta' ? 'ta-IN' : 'en-IN';
+        recognition.continuous = false;
+        recognition.interimResults = false;
+        recognition.onstart = () => {
+          setListeningState();
+          transcriptBox.innerHTML = '<div class="label">Transcript</div>Listening… Speak now.';
+        };
+        recognition.onerror = (event) => {
+          transcriptBox.innerHTML = `<div class="label">Transcript</div>Microphone error: ${event.error}`;
+          responseBox.innerHTML = '<div class="assistant-header">Voice Assistant</div><p>Microphone permission was denied or unavailable.</p>';
+          setStatus('Microphone blocked', 'listening');
+          clearListeningState();
+        };
+        recognition.onresult = (event) => {
+          const transcript = event.results[0][0].transcript;
+          transcriptBox.innerHTML = `<div class="label">Transcript</div>You said: ${transcript}`;
+          askAssistant(transcript);
+        };
+      }
+
+      recognition.start();
+    }
+
     micBtn.addEventListener('click', () => {
-      const item = promptBank[Math.floor(Math.random() * promptBank.length)];
-      askAssistant(item.prompt, 'mic');
+      startSpeechRecognition();
     });
 
     document.querySelectorAll('.voice-pill').forEach((pill) => {
       pill.addEventListener('click', () => {
         setStatus('Prompt selected', 'info');
-        askAssistant(pill.dataset.phrase || pill.textContent, 'pill');
+        askAssistant(pill.dataset.phrase || pill.textContent);
       });
     });
 
@@ -334,6 +368,7 @@
       btn.addEventListener('click', () => {
         langButtons.forEach((item) => item.classList.toggle('active', item === btn));
         activeLang = btn.dataset.lang;
+        recognition && recognition.stop();
         setStatus(`Language: ${btn.textContent}`, 'info');
         transcriptBox.innerHTML = `<div class="label">Transcript</div>Switched to ${btn.textContent}.`;
       });
