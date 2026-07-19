@@ -1,4 +1,5 @@
-const Lawyer = require("../model/lawyer");
+const bcrypt = require("bcrypt");
+const tempUsers = require("../data/tempusers");
 const redirectByRole = require("../utils/redirectRole");
 
 exports.getLogin = (req, res) => {
@@ -17,24 +18,30 @@ exports.login = async (req, res) => {
   const fromView = req.body.fromView || 'judge'; // 'judge' | 'cmaster'
   const errorView = fromView === 'cmaster' ? 'auth/cMasterLogin' : 'auth/judgeLogin';
   const errorLocals = { error: ['Invalid credentials. Please try again.'] };
+  const normalizedEmail = email ? email.toLowerCase().trim() : '';
 
   if (!email || !password) {
     return res.render(errorView, errorLocals);
   }
 
   try {
-    const lawyer = await Lawyer.findOne({ email: email.toLowerCase().trim() });
-    if (!lawyer) {
+    const user = tempUsers.find((u) => u.email === normalizedEmail);
+    if (!user) {
+      return res.render(errorView, errorLocals);
+    }
+
+    const isMatch = await bcrypt.compare(password, user.password);
+    if (!isMatch) {
       return res.render(errorView, errorLocals);
     }
 
     req.session.user = {
-      id: lawyer._id,
-      name: lawyer.username,
-      role: 'LAWYER',
+      id: user.id,
+      name: user.name,
+      role: user.role,
     };
 
-    redirectByRole('LAWYER', res);
+    redirectByRole(user.role, res);
   } catch (err) {
     console.error('authController login error:', err);
     return res.render(errorView, errorLocals);
