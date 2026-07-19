@@ -106,7 +106,7 @@ async function processVoiceAssistant(textInput, targetVoice = null) {
   }
 }
 
-async function getVoiceReply({ transcript = '', language = 'en' } = {}) {
+async function getVoiceReply({ transcript = '', language = 'en', targetVoice = null } = {}) {
   const normalizedLang = normalizeLanguage(language);
   const mockTranscript = buildMockTranscript(transcript, normalizedLang);
   const mockReply = buildMockReply(transcript, normalizedLang);
@@ -117,6 +117,9 @@ async function getVoiceReply({ transcript = '', language = 'en' } = {}) {
     transcript: mockTranscript,
     configured: false,
     provider: 'mock',
+    textResponse: mockReply,
+    isMock: true,
+    success: true,
   };
 
   if (!isConfigured()) {
@@ -124,7 +127,7 @@ async function getVoiceReply({ transcript = '', language = 'en' } = {}) {
   }
 
   try {
-    const ttsResult = await processVoiceAssistant(mockReply || transcript, null);
+    const ttsResult = await processVoiceAssistant(mockReply || transcript, targetVoice);
     return {
       source: 'gnani',
       reply: ttsResult.textResponse || mockReply,
@@ -133,6 +136,8 @@ async function getVoiceReply({ transcript = '', language = 'en' } = {}) {
       provider: ttsResult.isMock ? 'mock-fallback' : 'gnani',
       audioBuffer: ttsResult.audioBuffer,
       success: ttsResult.success,
+      textResponse: ttsResult.textResponse || mockReply,
+      isMock: ttsResult.isMock,
     };
   } catch (err) {
     console.warn('[gnaniVoiceService] Gnani request failed, using fallback:', err.message);

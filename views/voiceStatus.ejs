@@ -259,19 +259,19 @@
     const wave = document.getElementById('wave');
     const langButtons = document.querySelectorAll('.lang-btn');
 
+    const languageVoiceMap = {
+      en: { label: 'English', voice: 'Karan' },
+      hi: { label: 'हिंदी', voice: 'Simran' },
+      ta: { label: 'தமிழ்', voice: 'Nara' },
+    };
+
     let activeLang = 'en';
     let recognition = null;
 
     const promptBank = [
-      {
-        prompt: 'What is the status of my case?',
-      },
-      {
-        prompt: 'When is my next hearing?',
-      },
-      {
-        prompt: 'Tell me the latest update in Hindi',
-      }
+      { prompt: 'What is the status of my case?' },
+      { prompt: 'When is my next hearing?' },
+      { prompt: 'Tell me the latest update in Hindi' },
     ];
 
     function setStatus(message, tone = 'ready') {
@@ -290,29 +290,64 @@
       wave.classList.remove('active');
     }
 
+    function updateTranscript(text) {
+      transcriptBox.innerHTML = `<div class="label">Transcript</div>${text}`;
+    }
+
+    function updateResponse(text, hint = '') {
+      responseBox.innerHTML = `<div class="assistant-header">Voice Assistant</div><p>${text}</p>${hint ? `<div class="hint">${hint}</div>` : ''}`;
+    }
+
+    function decodeBase64Audio(base64String) {
+      if (!base64String) return null;
+      try {
+        const binaryString = atob(base64String);
+        const bytes = new Uint8Array(binaryString.length);
+        for (let i = 0; i < binaryString.length; i += 1) {
+          bytes[i] = binaryString.charCodeAt(i);
+        }
+        return bytes.buffer;
+      } catch (error) {
+        console.warn('Unable to decode audio payload.', error);
+        return null;
+      }
+    }
+
     async function askAssistant(inputText) {
+      const mappedVoice = languageVoiceMap[activeLang]?.voice || 'Karan';
       setListeningState();
-      transcriptBox.innerHTML = '<div class="label">Transcript</div>Sending request to the assistant…';
-      responseBox.innerHTML = '<div class="assistant-header">Voice Assistant</div><p>Processing your request…</p>';
+      updateTranscript(`You said: ${inputText}`);
+      updateResponse('Processing your request…');
 
       try {
         const response = await fetch('/api/voice/assistant', {
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({ transcript: inputText, language: activeLang })
+          body: JSON.stringify({ textInput: inputText, targetVoice: mappedVoice })
         });
         const data = await response.json();
+        const replyText = data.textResponse || data.reply || 'No response was returned.';
+        const providerHint = data.isMock || data.provider === 'mock-fallback'
+          ? 'Live voice backend unavailable; using local fallback.'
+          : (data.note || 'Reply generated via the configured Gnani backend.');
 
-        const transcriptText = data.transcript || `You said: ${inputText}`;
-        const replyText = data.reply || 'No response was returned.';
-        const providerText = data.provider === 'gnani' ? 'Reply generated via the configured Gnani backend.' : 'No GNANI credentials configured; using local fallback.';
+        updateTranscript(`You said: ${inputText}`);
+        updateResponse(replyText, providerHint);
+        setStatus(data.isMock || data.provider === 'mock-fallback' ? 'Local fallback' : 'Gnani ready', data.isMock || data.provider === 'mock-fallback' ? 'ready' : 'info');
 
-        transcriptBox.innerHTML = `<div class="label">Transcript</div>${transcriptText}`;
-        responseBox.innerHTML = `<div class="assistant-header">Voice Assistant</div><p>${replyText}</p><div class="hint">${providerText}</div>`;
-        setStatus(data.provider === 'gnani' ? 'GNANI ready' : 'Local fallback', data.provider === 'gnani' ? 'info' : 'ready');
+        if (data.audioBuffer && !data.isMock) {
+          const decodedBuffer = decodeBase64Audio(data.audioBuffer);
+          if (decodedBuffer) {
+            const audioBlob = new Blob([decodedBuffer], { type: data.audioContentType || 'audio/mpeg' });
+            const audioUrl = URL.createObjectURL(audioBlob);
+            const audio = new Audio(audioUrl);
+            audio.play().catch(() => {});
+            setTimeout(() => URL.revokeObjectURL(audioUrl), 10000);
+          }
+        }
       } catch (error) {
-        transcriptBox.innerHTML = '<div class="label">Transcript</div>Unable to reach the assistant.';
-        responseBox.innerHTML = `<div class="assistant-header">Voice Assistant</div><p>${error.message}</p>`;
+        updateTranscript(`You said: ${inputText}`);
+        updateResponse(error.message || 'Unable to reach the assistant.');
         setStatus('Offline', 'listening');
       } finally {
         clearListeningState();
@@ -322,8 +357,8 @@
     function startSpeechRecognition() {
       const SpeechRecognition = window.SpeechRecognition || window.webkitSpeechRecognition;
       if (!SpeechRecognition) {
-        transcriptBox.innerHTML = '<div class="label">Transcript</div>Browser microphone support is not available.';
-        responseBox.innerHTML = '<div class="assistant-header">Voice Assistant</div><p>Use Chrome or Edge to enable live voice input.</p>';
+        updateTranscript('Browser microphone support is not available.');
+        updateResponse('Use Chrome or Edge to enable live voice input.');
         setStatus('Microphone unavailable', 'listening');
         return;
       }
@@ -335,17 +370,17 @@
         recognition.interimResults = false;
         recognition.onstart = () => {
           setListeningState();
-          transcriptBox.innerHTML = '<div class="label">Transcript</div>Listening… Speak now.';
+          updateTranscript('Listening… Speak now.');
         };
         recognition.onerror = (event) => {
-          transcriptBox.innerHTML = `<div class="label">Transcript</div>Microphone error: ${event.error}`;
-          responseBox.innerHTML = '<div class="assistant-header">Voice Assistant</div><p>Microphone permission was denied or unavailable.</p>';
+          updateTranscript(`Microphone error: ${event.error}`);
+          updateResponse('Microphone permission was denied or unavailable.');
           setStatus('Microphone blocked', 'listening');
           clearListeningState();
         };
         recognition.onresult = (event) => {
           const transcript = event.results[0][0].transcript;
-          transcriptBox.innerHTML = `<div class="label">Transcript</div>You said: ${transcript}`;
+          updateTranscript(`You said: ${transcript}`);
           askAssistant(transcript);
         };
       }
@@ -359,18 +394,19 @@
 
     document.querySelectorAll('.voice-pill').forEach((pill) => {
       pill.addEventListener('click', () => {
+        const clickedPromptText = pill.textContent.trim();
         setStatus('Prompt selected', 'info');
-        askAssistant(pill.dataset.phrase || pill.textContent);
+        askAssistant(clickedPromptText);
       });
     });
 
     langButtons.forEach((btn) => {
       btn.addEventListener('click', () => {
         langButtons.forEach((item) => item.classList.toggle('active', item === btn));
-        activeLang = btn.dataset.lang;
+        activeLang = btn.getAttribute('data-lang') || 'en';
         recognition && recognition.stop();
         setStatus(`Language: ${btn.textContent}`, 'info');
-        transcriptBox.innerHTML = `<div class="label">Transcript</div>Switched to ${btn.textContent}.`;
+        updateTranscript(`Switched to ${btn.textContent}.`);
       });
     });
   </script>

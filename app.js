@@ -107,21 +107,30 @@ app.get("/voice-status", (req, res) => {
     samplePhrases: [
       "What is the status of my case?",
       "When is my next hearing?",
-      "Tell me the latest update in Hindi"
     ]
   });
 });
 
 app.post('/api/voice/assistant', async (req, res) => {
   try {
-    const { transcript = '', language = 'en' } = req.body || {};
-    const result = await getVoiceReply({ transcript, language });
+    const { textInput, transcript = '', language = 'en', targetVoice = null } = req.body || {};
+    const inputText = textInput || transcript || '';
+    const result = await getVoiceReply({ transcript: inputText, language, targetVoice });
+    const audioBufferBase64 = Buffer.isBuffer(result.audioBuffer)
+      ? result.audioBuffer.toString('base64')
+      : (result.audioBuffer ? String(result.audioBuffer) : null);
+
     res.json({
       ok: true,
       configured: result.configured,
       provider: result.provider,
       transcript: result.transcript,
       reply: result.reply,
+      textResponse: result.textResponse || result.reply || '',
+      audioBuffer: audioBufferBase64,
+      audioContentType: result.audioContentType || 'audio/mpeg',
+      isMock: result.isMock ?? (result.provider === 'mock' || result.provider === 'mock-fallback'),
+      success: result.success ?? true,
       note: isConfigured() ? 'Using configured voice backend.' : 'No GNANI credentials configured; using mock response.'
     });
   } catch (err) {
