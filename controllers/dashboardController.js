@@ -491,15 +491,39 @@ exports.getDailyCauseList = async (req, res) => {
     // processing with GROQ_REQUEST_DELAY_MS between calls keeps the token
     // rate well within limits. The algorithmic fallback in llmSchedulerService
     // ensures every case still gets a score even if a 429 slips through.
-    const augmentations = [];
-    for (const [i, item] of causeListCases.entries()) {
-      const augmentedData = await aiAugmentCase(caseById[item._id] || item);
-      augmentations.push(augmentedData);
-      // Throttle: skip delay after the last item
-      if (i < causeListCases.length - 1) {
-        await sleep(GROQ_REQUEST_DELAY_MS);
-      }
+    // Bounded concurrency, same pattern as schedulerController.js's pooledMap
+async function pooledMap(items, concurrency, worker) {
+  const results = new Array(items.length);
+  let idx = 0;
+  async function runSlot() {
+    while (idx < items.length) {
+      const i = idx++;
+      results[i] = await worker(items[i]);
     }
+  }
+  await Promise.all(Array.from({ length: Math.min(concurrency, items.length) }, runSlot));
+  return results;
+}
+
+// Hard per-item ceiling so one slow call can't eat the whole function budget
+function withTimeout(promise, ms, fallbackValue) {
+  return Promise.race([
+    promise,
+    new Promise((resolve) => setTimeout(() => resolve(fallbackValue), ms)),
+  ]);
+}
+
+// Replace the for-loop with:
+const AI_CONCURRENCY = 3;       // tune against Groq's TPM limit
+const PER_ITEM_TIMEOUT_MS = 8000;
+
+const augmentations = await pooledMap(causeListCases, AI_CONCURRENCY, (item) =>
+  withTimeout(
+    aiAugmentCase(caseById[item._id] || item),
+    PER_ITEM_TIMEOUT_MS,
+    null // aiAugmentCase already degrades gracefully elsewhere; null is handled downstream
+  )
+);
 
     // ── 5. Merge AI results back into each cause list item ────────────────────
     const augmentedList = causeListCases.map((item, i) => {
