@@ -99,6 +99,18 @@ app.get("/cMasterLogin",(req,res) =>{
     res.render("auth/cMasterLogin.ejs");
 });
 
+app.get("/voice-status", (req, res) => {
+  res.render("voiceStatus", {
+    title: "Voice Case Status",
+    subtitle: "Future-ready voice experience for citizens and advocates",
+    samplePhrases: [
+      "What is the status of my case?",
+      "When is my next hearing?",
+      "Tell me the latest update in Hindi"
+    ]
+  });
+});
+
 app.listen(8080,()=>{
     console.log("Listening to port Successfully!");
 });

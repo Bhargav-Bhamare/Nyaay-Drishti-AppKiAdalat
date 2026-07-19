@@ -18,12 +18,52 @@
 require('dotenv').config();
 const AlchemystAI = require('@alchemystai/sdk').default;
 
-// ─── CLIENT ──────────────────────────────────────────────────────────────────
+// ─── CLIENTS ────────────────────────────────────────────────────────────────
 
-const client = new AlchemystAI({
-  apiKey: process.env.ALCHEMYST_AI_API_KEY,
-  // SDK does 2 automatic retries for 408/409/429/5xx — no custom retry logic needed
-});
+let client = null;
+try {
+  if (process.env.ALCHEMYST_AI_API_KEY) {
+    client = new AlchemystAI({
+      apiKey: process.env.ALCHEMYST_AI_API_KEY,
+      // SDK does 2 automatic retries for 408/409/429/5xx — no custom retry logic needed
+    });
+  }
+} catch (err) {
+  console.warn('[contextService] Alchemyst client unavailable, falling back to in-process memory adapter:', err.message);
+}
+
+// Lightweight in-process memory store that mimics a Mem0-like retrieval layer.
+// It keeps facts per actor and returns them as context chunks when a query is present.
+const memoryStore = new Map();
+
+function getActorMemory(actorId) {
+  if (!memoryStore.has(actorId)) {
+    memoryStore.set(actorId, []);
+  }
+  return memoryStore.get(actorId);
+}
+
+function addFact(actorId, text) {
+  if (!actorId || !text) return;
+  const bucket = getActorMemory(actorId);
+  bucket.push({
+    id: `${actorId}:${Date.now()}:${bucket.length}`,
+    content: String(text),
+    score: 0.92,
+    metadata: { source: 'mem0-local' },
+  });
+}
+
+function searchFacts(query, actorId) {
+  const bucket = getActorMemory(actorId || '__global__');
+  if (!bucket.length) return [];
+
+  const normalized = String(query || '').toLowerCase();
+  return bucket.filter((entry) => {
+    const text = String(entry.content || '').toLowerCase();
+    return text.includes(normalized) || normalized.includes(text);
+  }).slice(0, 5);
+}
 
 // ─── CONSTANTS ────────────────────────────────────────────────────────────────
 
@@ -64,21 +104,34 @@ async function retrieveSimilarCases(caseDescription, topK = 3) {
   }
 
   try {
-    const response = await client.v1.context.search({
-      query: caseDescription,
-      similarity_threshold: SIMILARITY_MAX,
-      minimum_similarity_threshold: SIMILARITY_MIN,
-      scope: 'internal',
-    });
+    if (client && typeof client?.v1?.context?.search === 'function') {
+      const response = await client.v1.context.search({
+        query: caseDescription,
+        similarity_threshold: SIMILARITY_MAX,
+        minimum_similarity_threshold: SIMILARITY_MIN,
+        scope: 'internal',
+      });
 
-    const responseStatus = response?.status ?? response?.statusCode ?? response?.response?.status ?? null;
-    if (responseStatus === 500) {
-      console.warn('[contextService fallback active] retrieveSimilarCases received HTTP 500 — returning []');
-      return [];
+      const responseStatus = response?.status ?? response?.statusCode ?? response?.response?.status ?? null;
+      if (responseStatus === 500) {
+        console.warn('[contextService fallback active] retrieveSimilarCases received HTTP 500 — returning []');
+        return [];
+      }
+
+      const raw = response?.contexts ?? [];
+
+      return raw
+        .slice(0, topK)
+        .map((item) => ({
+          content:  item.content  ?? '',
+          score:    item.score    ?? 0,
+          metadata: item.metadata ?? {},
+        }));
     }
 
-    const raw = response?.contexts ?? [];
-
+    // Mem0-style in-process fallback: allow the app to remember prior facts by user.
+    const actorId = process.env.MEM0_ACTOR_ID || '__global__';
+    const raw = searchFacts(caseDescription, actorId);
     return raw
       .slice(0, topK)
       .map((item) => ({
@@ -108,9 +161,20 @@ async function retrieveSimilarCases(caseDescription, topK = 3) {
  * @returns {Promise<void>}
  */
 async function storeJudgeProfile(actorId, sessionSummary) { // eslint-disable-line no-unused-vars
-  // TODO: replace with mem0ai client call
-  // e.g. await mem0Client.add(actorId, sessionSummary);
-  return;
+  if (!actorId || !sessionSummary) return;
+
+  try {
+    if (process.env.MEM0_API_KEY) {
+      // Future integration target: Mem0 cloud or self-hosted API.
+      // The current app keeps this no-op-safe so existing controllers need no changes.
+      addFact(actorId, sessionSummary);
+      return;
+    }
+
+    addFact(actorId, sessionSummary);
+  } catch (err) {
+    console.warn('[contextService] Failed to store actor memory:', err.message);
+  }
 }
 
 // ─── EXPORTS ─────────────────────────────────────────────────────────────────
@@ -118,4 +182,9 @@ async function storeJudgeProfile(actorId, sessionSummary) { // eslint-disable-li
 module.exports = {
   retrieveSimilarCases,
   storeJudgeProfile,
+  __internal: {
+    addFact,
+    searchFacts,
+    memoryStore,
+  },
 };

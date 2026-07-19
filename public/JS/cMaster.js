@@ -7,9 +7,31 @@ const DAY_AVAILABLE_MINUTES = 300; // default
 
 async function loadCauseListForCM() {
   try {
-    const res = await fetch('/api/dashboard/daily-cause-list?availableMinutes=' + DAY_AVAILABLE_MINUTES + '&aiEnhanced=true');
-    if (!res.ok) throw new Error('Failed to fetch daily cause list');
-    const json = await res.json();
+    const res = await fetch('/api/dashboard/daily-cause-list?availableMinutes=' + DAY_AVAILABLE_MINUTES + '&aiEnhanced=true', {
+      headers: { Accept: 'application/json' },
+    });
+
+    const contentType = res.headers.get('content-type') || '';
+    const rawText = await res.text();
+
+    if (!res.ok) {
+      if (res.status === 401 || res.status === 403 || rawText.includes('<!DOCTYPE') || rawText.includes('<html')) {
+        throw new Error('Please sign in as a Court Master to load the cause list.');
+      }
+      throw new Error(`Cause list request failed with status ${res.status}.`);
+    }
+
+    if (!contentType.includes('application/json')) {
+      throw new Error('The cause list endpoint returned an unexpected response.');
+    }
+
+    let json;
+    try {
+      json = JSON.parse(rawText);
+    } catch (parseErr) {
+      throw new Error('The cause list endpoint returned invalid JSON.');
+    }
+
     const list = json && json.data && json.data.dailyCauseList ? json.data.dailyCauseList : [];
     const summary = json && json.data && json.data.summary ? json.data.summary : {};
     renderCauseList(list);
@@ -17,7 +39,10 @@ async function loadCauseListForCM() {
   } catch (err) {
     console.error('Error loading cause list for Court Master:', err);
     const tbody = document.getElementById('causeListBody');
-    if (tbody) tbody.innerHTML = '<tr><td colspan="8" style="text-align:center;color:#dc3545;padding:1rem;">Failed to load cause list. Please refresh.</td></tr>';
+    if (tbody) {
+      const message = err && err.message ? err.message : 'Failed to load cause list. Please refresh.';
+      tbody.innerHTML = `<tr><td colspan="8" style="text-align:center;color:#dc3545;padding:1rem;">${escapeHtml(message)}</td></tr>`;
+    }
   }
 }
 

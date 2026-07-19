@@ -331,6 +331,89 @@ section {
 }
 
 /* ===================================
+   VOICE CTA SECTION
+   =================================== */
+
+.voice-cta-section {
+  padding-top: calc(var(--spacing-xl) + 8px);
+  padding-bottom: 0;
+}
+
+.voice-cta-card {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: var(--spacing-lg);
+  padding: var(--spacing-lg);
+  background: linear-gradient(135deg, #eef6ff 0%, #f8fbff 100%);
+  border: 1px solid #cfe0ff;
+  border-radius: var(--radius-lg);
+  box-shadow: var(--shadow-md);
+}
+
+.voice-cta-content {
+  display: flex;
+  align-items: center;
+  gap: var(--spacing-md);
+}
+
+.voice-cta-icon {
+  font-size: 2rem;
+  background: var(--primary-blue);
+  color: var(--white);
+  border-radius: 50%;
+  width: 56px;
+  height: 56px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+}
+
+.voice-cta-title {
+  color: var(--primary-navy);
+  font-size: 1.25rem;
+  font-weight: 700;
+  margin-bottom: 4px;
+}
+
+.voice-cta-subtitle {
+  color: var(--text-light);
+  max-width: 620px;
+}
+
+.voice-cta-actions {
+  display: flex;
+  align-items: center;
+  gap: var(--spacing-sm);
+  flex-wrap: wrap;
+}
+
+.voice-cta-btn {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  padding: 10px 16px;
+  border-radius: 999px;
+  background: var(--primary-blue);
+  color: var(--white);
+  font-weight: 600;
+}
+
+.voice-cta-btn:hover {
+  background: var(--accent-blue);
+  color: var(--white);
+}
+
+.voice-cta-pill {
+  padding: 8px 12px;
+  border-radius: 999px;
+  background: rgba(44, 74, 124, 0.1);
+  color: var(--primary-blue);
+  font-size: 0.9rem;
+  font-weight: 600;
+}
+
+/* ===================================
    DASHBOARD SECTION
    =================================== */
 

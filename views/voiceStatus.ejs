@@ -1,0 +1,75 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title><%= title %> - NyaayDrishti</title>
+  <link rel="stylesheet" href="/CSS/Landing/style.css" />
+  <style>
+    body { background: #f4f7fb; color: #1a2332; }
+    .voice-screen {
+      max-width: 900px;
+      margin: 80px auto;
+      padding: 32px;
+      background: #fff;
+      border-radius: 20px;
+      box-shadow: 0 20px 50px rgba(0,0,0,0.08);
+    }
+    .voice-screen h1 { font-size: 2rem; margin-bottom: 10px; color: #1a2332; }
+    .voice-screen p { color: #5a6c7d; margin-bottom: 24px; }
+    .voice-card {
+      border: 1px solid #d8e6ff;
+      border-radius: 16px;
+      padding: 20px;
+      background: linear-gradient(135deg, #eef6ff 0%, #f8fbff 100%);
+      margin-bottom: 20px;
+    }
+    .voice-pill {
+      display: inline-block;
+      margin: 6px 6px 0 0;
+      padding: 8px 12px;
+      border-radius: 999px;
+      background: #e5f0ff;
+      color: #2c4a7c;
+      font-size: 0.92rem;
+      font-weight: 600;
+    }
+    .voice-actions {
+      display: flex;
+      gap: 12px;
+      flex-wrap: wrap;
+      margin-top: 12px;
+    }
+    .voice-action-btn {
+      padding: 12px 16px;
+      border-radius: 999px;
+      background: #2c4a7c;
+      color: #fff;
+      font-weight: 600;
+      text-decoration: none;
+    }
+  </style>
+</head>
+<body>
+  <div class="voice-screen">
+    <h1><%= title %></h1>
+    <p><%= subtitle %></p>
+
+    <div class="voice-card">
+      <h3>Voice Experience Preview</h3>
+      <p>In the future, this screen can connect to Gnani.ai for multilingual speech-to-text and text-to-speech.</p>
+      <div class="voice-actions">
+        <a class="voice-action-btn" href="/">Back to Home</a>
+        <a class="voice-action-btn" href="/cMasterLogin">Go to Court Master Login</a>
+      </div>
+    </div>
+
+    <div class="voice-card">
+      <h3>Example citizen prompts</h3>
+      <% samplePhrases.forEach((phrase) => { %>
+        <span class="voice-pill"><%= phrase %></span>
+      <% }) %>
+    </div>
+  </div>
+</body>
+</html>
