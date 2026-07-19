@@ -8,21 +8,80 @@
   <style>
     body { background: #f4f7fb; color: #1a2332; }
     .voice-screen {
-      max-width: 900px;
+      max-width: 980px;
       margin: 80px auto;
       padding: 32px;
       background: #fff;
-      border-radius: 20px;
+      border-radius: 24px;
       box-shadow: 0 20px 50px rgba(0,0,0,0.08);
     }
-    .voice-screen h1 { font-size: 2rem; margin-bottom: 10px; color: #1a2332; }
-    .voice-screen p { color: #5a6c7d; margin-bottom: 24px; }
+    .voice-banner {
+      display: flex;
+      justify-content: space-between;
+      align-items: start;
+      gap: 16px;
+      margin-bottom: 18px;
+      flex-wrap: wrap;
+    }
+    .voice-badge {
+      display: inline-block;
+      background: #e8f2ff;
+      color: #2c4a7c;
+      padding: 6px 10px;
+      border-radius: 999px;
+      font-size: 0.82rem;
+      font-weight: 700;
+      margin-bottom: 8px;
+      text-transform: uppercase;
+      letter-spacing: 0.08em;
+    }
+    .voice-screen h1 { font-size: 2rem; margin-bottom: 8px; color: #1a2332; }
+    .voice-screen p { color: #5a6c7d; margin-bottom: 0; }
+    .status-chip {
+      padding: 8px 12px;
+      border-radius: 999px;
+      font-size: 0.92rem;
+      font-weight: 700;
+      background: #eaf6ee;
+      color: #157347;
+      border: 1px solid #c6ebd2;
+    }
+    .status-chip.listening {
+      background: #fff8e5;
+      color: #945f00;
+      border-color: #f2d488;
+    }
+    .status-chip.info {
+      background: #eef5ff;
+      color: #2c4a7c;
+      border-color: #cfe0ff;
+    }
     .voice-card {
       border: 1px solid #d8e6ff;
       border-radius: 16px;
       padding: 20px;
       background: linear-gradient(135deg, #eef6ff 0%, #f8fbff 100%);
       margin-bottom: 20px;
+    }
+    .lang-switcher {
+      display: flex;
+      gap: 8px;
+      flex-wrap: wrap;
+      margin-bottom: 14px;
+    }
+    .lang-btn {
+      border: 1px solid #cfe0ff;
+      background: #fff;
+      color: #2c4a7c;
+      padding: 8px 12px;
+      border-radius: 999px;
+      font-weight: 700;
+      cursor: pointer;
+    }
+    .lang-btn.active {
+      background: #2c4a7c;
+      color: #fff;
+      border-color: #2c4a7c;
     }
     .voice-pill {
       display: inline-block;
@@ -33,12 +92,14 @@
       color: #2c4a7c;
       font-size: 0.92rem;
       font-weight: 600;
+      border: none;
+      cursor: pointer;
     }
     .voice-actions {
       display: flex;
       gap: 12px;
       flex-wrap: wrap;
-      margin-top: 12px;
+      margin-top: 14px;
     }
     .voice-action-btn {
       padding: 12px 16px;
@@ -48,28 +109,235 @@
       font-weight: 600;
       text-decoration: none;
     }
+    .voice-action-btn.secondary {
+      background: #fff;
+      color: #2c4a7c;
+      border: 1px solid #cfe0ff;
+    }
+    .voice-visual {
+      display: grid;
+      grid-template-columns: 1.1fr 0.9fr;
+      gap: 16px;
+      align-items: start;
+    }
+    .mic-btn {
+      width: 88px;
+      height: 88px;
+      border-radius: 50%;
+      border: none;
+      display: grid;
+      place-items: center;
+      font-size: 2rem;
+      cursor: pointer;
+      background: linear-gradient(135deg, #2c4a7c 0%, #4a6fa5 100%);
+      color: #fff;
+      box-shadow: 0 10px 25px rgba(44,74,124,0.28);
+      margin-bottom: 12px;
+      transition: transform 0.2s ease, box-shadow 0.2s ease;
+    }
+    .mic-btn.listening {
+      transform: scale(1.04);
+      box-shadow: 0 12px 30px rgba(44,74,124,0.35);
+    }
+    .wave {
+      display: inline-flex;
+      gap: 6px;
+      margin-bottom: 10px;
+      opacity: 0;
+      transition: opacity 0.2s ease;
+    }
+    .wave.active {
+      opacity: 1;
+    }
+    .wave span {
+      width: 7px;
+      height: 10px;
+      border-radius: 999px;
+      background: #4a6fa5;
+      animation: pulse 1s infinite ease-in-out;
+    }
+    .wave span:nth-child(2) { animation-delay: 0.16s; }
+    .wave span:nth-child(3) { animation-delay: 0.32s; }
+    .transcript-box {
+      border: 1px solid #cfe0ff;
+      border-radius: 12px;
+      padding: 14px;
+      background: #fff;
+      min-height: 110px;
+      color: #1a2332;
+    }
+    .transcript-box .label {
+      font-size: 0.78rem;
+      color: #5a6c7d;
+      text-transform: uppercase;
+      letter-spacing: 0.08em;
+      margin-bottom: 8px;
+      font-weight: 700;
+    }
+    .response-box {
+      border-left: 4px solid #2c4a7c;
+      padding: 12px 14px;
+      background: #f6fbff;
+      border-radius: 8px;
+      color: #1a2332;
+      min-height: 160px;
+    }
+    .assistant-header {
+      font-weight: 800;
+      margin-bottom: 8px;
+      color: #2c4a7c;
+    }
+    .hint {
+      margin-top: 10px;
+      font-size: 0.9rem;
+      color: #5a6c7d;
+      font-style: italic;
+    }
+    @keyframes pulse {
+      0%, 100% { transform: scaleY(0.6); opacity: 0.6; }
+      50% { transform: scaleY(1.2); opacity: 1; }
+    }
+    @media (max-width: 800px) {
+      .voice-visual { grid-template-columns: 1fr; }
+    }
   </style>
 </head>
 <body>
   <div class="voice-screen">
-    <h1><%= title %></h1>
-    <p><%= subtitle %></p>
+    <div class="voice-banner">
+      <div>
+        <div class="voice-badge">Voice-first citizen experience</div>
+        <h1><%= title %></h1>
+        <p><%= subtitle %></p>
+      </div>
+      <div class="status-chip" id="statusChip">Ready</div>
+    </div>
 
     <div class="voice-card">
-      <h3>Voice Experience Preview</h3>
-      <p>In the future, this screen can connect to Gnani.ai for multilingual speech-to-text and text-to-speech.</p>
+      <div class="lang-switcher">
+        <button class="lang-btn active" data-lang="en">English</button>
+        <button class="lang-btn" data-lang="hi">हिंदी</button>
+        <button class="lang-btn" data-lang="ta">தமிழ்</button>
+      </div>
+      <div class="voice-visual">
+        <div>
+          <button class="mic-btn" aria-label="Start voice input">🎙️</button>
+          <div class="wave" id="wave" aria-hidden="true">
+            <span></span><span></span><span></span>
+          </div>
+          <div class="transcript-box" id="transcriptBox">
+            <div class="label">Transcript</div>
+            Tap the mic or choose a prompt to preview the assistant flow.
+          </div>
+        </div>
+        <div class="response-box" id="responseBox">
+          <div class="assistant-header">Voice Assistant</div>
+          <p>“You can ask for case status, hearing time, or document updates.”</p>
+          <div class="hint">The experience is now designed to feel more conversational and multilingual.</div>
+        </div>
+      </div>
       <div class="voice-actions">
         <a class="voice-action-btn" href="/">Back to Home</a>
-        <a class="voice-action-btn" href="/cMasterLogin">Go to Court Master Login</a>
+        <a class="voice-action-btn secondary" href="/cMasterLogin">Go to Court Master Login</a>
       </div>
     </div>
 
     <div class="voice-card">
       <h3>Example citizen prompts</h3>
-      <% samplePhrases.forEach((phrase) => { %>
-        <span class="voice-pill"><%= phrase %></span>
-      <% }) %>
+      <div class="voice-pills">
+        <% samplePhrases.forEach((phrase) => { %>
+          <button class="voice-pill" data-phrase="<%= phrase %>"><%= phrase %></button>
+        <% }) %>
+      </div>
     </div>
   </div>
+  <script>
+    const micBtn = document.querySelector('.mic-btn');
+    const transcriptBox = document.getElementById('transcriptBox');
+    const responseBox = document.getElementById('responseBox');
+    const statusChip = document.getElementById('statusChip');
+    const wave = document.getElementById('wave');
+    const langButtons = document.querySelectorAll('.lang-btn');
+
+    let activeLang = 'en';
+
+    const promptBank = [
+      {
+        prompt: 'What is the status of my case?',
+      },
+      {
+        prompt: 'When is my next hearing?',
+      },
+      {
+        prompt: 'Tell me the latest update in Hindi',
+      }
+    ];
+
+    function setStatus(message, tone = 'ready') {
+      statusChip.textContent = message;
+      statusChip.className = `status-chip ${tone}`;
+    }
+
+    function setListeningState() {
+      micBtn.classList.add('listening');
+      wave.classList.add('active');
+      setStatus('Listening…', 'listening');
+    }
+
+    function clearListeningState() {
+      micBtn.classList.remove('listening');
+      wave.classList.remove('active');
+    }
+
+    async function askAssistant(inputText, source = 'prompt') {
+      setListeningState();
+      transcriptBox.innerHTML = '<div class="label">Transcript</div>Sending request to the assistant…';
+      responseBox.innerHTML = '<div class="assistant-header">Voice Assistant</div><p>Processing your request…</p>';
+
+      try {
+        const response = await fetch('/api/voice/assistant', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ transcript: inputText, language: activeLang })
+        });
+        const data = await response.json();
+
+        const transcriptText = data.transcript || `You said: ${inputText}`;
+        const replyText = data.reply || 'No response was returned.';
+        const providerText = data.provider === 'gnani' ? 'Reply generated via the configured Gnani backend.' : 'No GNANI credentials configured; using local fallback.';
+
+        transcriptBox.innerHTML = `<div class="label">Transcript</div>${transcriptText}`;
+        responseBox.innerHTML = `<div class="assistant-header">Voice Assistant</div><p>${replyText}</p><div class="hint">${providerText}</div>`;
+        setStatus(data.provider === 'gnani' ? 'GNANI ready' : 'Local fallback', data.provider === 'gnani' ? 'info' : 'ready');
+      } catch (error) {
+        transcriptBox.innerHTML = '<div class="label">Transcript</div>Unable to reach the assistant.';
+        responseBox.innerHTML = `<div class="assistant-header">Voice Assistant</div><p>${error.message}</p>`;
+        setStatus('Offline', 'listening');
+      } finally {
+        clearListeningState();
+      }
+    }
+
+    micBtn.addEventListener('click', () => {
+      const item = promptBank[Math.floor(Math.random() * promptBank.length)];
+      askAssistant(item.prompt, 'mic');
+    });
+
+    document.querySelectorAll('.voice-pill').forEach((pill) => {
+      pill.addEventListener('click', () => {
+        setStatus('Prompt selected', 'info');
+        askAssistant(pill.dataset.phrase || pill.textContent, 'pill');
+      });
+    });
+
+    langButtons.forEach((btn) => {
+      btn.addEventListener('click', () => {
+        langButtons.forEach((item) => item.classList.toggle('active', item === btn));
+        activeLang = btn.dataset.lang;
+        setStatus(`Language: ${btn.textContent}`, 'info');
+        transcriptBox.innerHTML = `<div class="label">Transcript</div>Switched to ${btn.textContent}.`;
+      });
+    });
+  </script>
 </body>
 </html>

@@ -15,6 +15,7 @@ const authRoutes     = require("./routes/authRoutes");
 const dashboardRoutes  = require("./routes/dashboardRoutes");
 const lawyerRouter     = require("./routes/lawyer.js");
 const schedulerRoutes  = require("./routes/schedulerRoutes");
+const { getVoiceReply, isConfigured } = require('./services/gnaniVoiceService');
 
 const session = require("express-session");
 
@@ -109,6 +110,23 @@ app.get("/voice-status", (req, res) => {
       "Tell me the latest update in Hindi"
     ]
   });
+});
+
+app.post('/api/voice/assistant', async (req, res) => {
+  try {
+    const { transcript = '', language = 'en' } = req.body || {};
+    const result = await getVoiceReply({ transcript, language });
+    res.json({
+      ok: true,
+      configured: result.configured,
+      provider: result.provider,
+      transcript: result.transcript,
+      reply: result.reply,
+      note: isConfigured() ? 'Using configured voice backend.' : 'No GNANI credentials configured; using mock response.'
+    });
+  } catch (err) {
+    res.status(500).json({ ok: false, error: err.message });
+  }
 });
 
 app.listen(8080,()=>{
