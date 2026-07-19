@@ -9,6 +9,7 @@ const flash = require("connect-flash");
 const passport = require("passport");
 const LocalStrategy = require("passport-local");
 const Lawyer = require("./model/lawyer.js");
+const serverless = require("serverless-http");
 
 //Router Requirement
 const authRoutes     = require("./routes/authRoutes");
@@ -44,7 +45,7 @@ async function main() {
 app.use(
   session({
     name: "judicial-session",
-    secret: "hackathon-secret-key",
+    secret: process.env.SESSION_SECRET || "hackathon-secret-key",
     resave: false,
     saveUninitialized: false,
     cookie: {
@@ -140,6 +141,12 @@ app.post('/api/voice/assistant', async (req, res) => {
   }
 });
 
-app.listen(8080,()=>{
-    console.log("Listening to port Successfully!");
-});
+const port = process.env.PORT || 8080;
+
+if (require.main === module) {
+  app.listen(port, () => {
+    console.log(`Listening to port ${port} Successfully!`);
+  });
+}
+
+module.exports = serverless(app);
