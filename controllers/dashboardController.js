@@ -12,11 +12,11 @@ const CONFIDENCE_THRESHOLD = 0.70;
 
 /**
  * Milliseconds to wait between consecutive Groq calls in a batch.
- * At the free-tier limit of 6000 TPM, each ~300-token request needs ~3 s of
- * headroom when 13 cases are processed. 800 ms gives comfortable breathing
- * room without making the endpoint feel slow.
+ * At the free-tier limit of 6000 TPM, each ~300-token request needs a little
+ * breathing room when 13 cases are processed. 600 ms keeps the burst rate low
+ * without making the endpoint feel sluggish.
  */
-const GROQ_REQUEST_DELAY_MS = 800;
+const GROQ_REQUEST_DELAY_MS = 600;
 
 // Sample data for demonstration (can be replaced with DB queries)
 const sampleCases = [
@@ -492,9 +492,9 @@ exports.getDailyCauseList = async (req, res) => {
     // rate well within limits. The algorithmic fallback in llmSchedulerService
     // ensures every case still gets a score even if a 429 slips through.
     const augmentations = [];
-    for (let i = 0; i < causeListCases.length; i++) {
-      const item = causeListCases[i];
-      augmentations.push(await aiAugmentCase(caseById[item._id] || item));
+    for (const [i, item] of causeListCases.entries()) {
+      const augmentedData = await aiAugmentCase(caseById[item._id] || item);
+      augmentations.push(augmentedData);
       // Throttle: skip delay after the last item
       if (i < causeListCases.length - 1) {
         await sleep(GROQ_REQUEST_DELAY_MS);
@@ -503,17 +503,17 @@ exports.getDailyCauseList = async (req, res) => {
 
     // ── 5. Merge AI results back into each cause list item ────────────────────
     const augmentedList = causeListCases.map((item, i) => {
-      const aug = augmentations[i];
-      if (!aug) return item;  // safety net — should never be null now
-      return {
+      const augmentedData = augmentations[i];
+      return augmentedData ? {
         ...item,
-        usedLLM:               aug.usedLLM,
-        finalPriorityScore:    aug.finalPriorityScore,
-        finalEstimatedMinutes: aug.finalEstimatedMinutes,
-        llm:                   aug.llm,
-        ruleBased:             aug.ruleBased,
-        estimatedTime:         aug.finalEstimatedMinutes,
-      };
+        ...augmentedData,
+        usedLLM:               augmentedData.usedLLM,
+        finalPriorityScore:    augmentedData.finalPriorityScore,
+        finalEstimatedMinutes: augmentedData.finalEstimatedMinutes,
+        llm:                   augmentedData.llm,
+        ruleBased:             augmentedData.ruleBased,
+        estimatedTime:         augmentedData.finalEstimatedMinutes,
+      } : item;
     });
 
     // ── 6. Re-sort by AI-derived priority, tiebreak by ageInDays ─────────────

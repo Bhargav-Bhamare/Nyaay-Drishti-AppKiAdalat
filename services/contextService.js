@@ -71,6 +71,12 @@ async function retrieveSimilarCases(caseDescription, topK = 3) {
       scope: 'internal',
     });
 
+    const responseStatus = response?.status ?? response?.statusCode ?? response?.response?.status ?? null;
+    if (responseStatus === 500) {
+      console.warn('[contextService fallback active] retrieveSimilarCases received HTTP 500 — returning []');
+      return [];
+    }
+
     const raw = response?.contexts ?? [];
 
     return raw
@@ -84,8 +90,8 @@ async function retrieveSimilarCases(caseDescription, topK = 3) {
     // Catch all failures — 500 from Alchemyst, network errors, SDK exhausted
     // retries, etc. — and degrade gracefully so the LLM still runs without
     // historical context and the endpoint always returns 200.
-    const status  = err.status ?? err.response?.status ?? 'N/A';
-    const detail  = err.message ?? String(err);
+    const status  = err?.status ?? err?.response?.status ?? err?.statusCode ?? 'N/A';
+    const detail  = err?.message ?? String(err);
     console.warn(`[contextService fallback active] retrieveSimilarCases failed (HTTP ${status}): ${detail}`);
     return [];
   }

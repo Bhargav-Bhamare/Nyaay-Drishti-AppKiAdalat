@@ -197,6 +197,7 @@ function algorithmicFallbackScore(casePayload) {
     estimatedMinutes,
     reasoning: 'Algorithmic layout (AI Engine throttled)',
     confidence: 0.40,   // below CONFIDENCE_THRESHOLD — controller uses rule-based score
+    usedLLM: false,
   };
 }
 
@@ -273,12 +274,21 @@ async function generateSchedulingMetadata(casePayload, contextChunks) {
     if (status === 429) {
       // Rate limit — use the algorithmic fallback so the batch keeps running
       console.warn(`[Groq fallback active] HTTP 429 rate limit — using algorithmic score for case ${casePayload.cnrNumber}`);
-      return algorithmicFallbackScore(casePayload);
+      const fallback = algorithmicFallbackScore(casePayload);
+      return {
+        ...fallback,
+        reasoning: 'Algorithmic layout (AI Engine throttled)',
+        usedLLM: false,
+      };
     }
 
     // Any other error (503, network timeout, etc.) — same fallback
     console.warn(`[Groq fallback active] HTTP ${status ?? 'N/A'} — ${detail} — using algorithmic score for case ${casePayload.cnrNumber}`);
-    return algorithmicFallbackScore(casePayload);
+    const fallback = algorithmicFallbackScore(casePayload);
+    return {
+      ...fallback,
+      usedLLM: false,
+    };
   }
 }
 
